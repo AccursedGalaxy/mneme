@@ -93,6 +93,27 @@ search. The pipeline is **additive**: facts accumulate and are deduped by hash
 and by the extractor's awareness of existing memories — one LLM call per `Add`,
 no update/delete pass in v1.
 
+### What "additive" means for callers (read this)
+
+v1 **never updates or deletes a fact on its own.** This has consequences you
+must design around:
+
+- **Garbage in, garbage forever.** A wrong fact you `Add` is recalled until you
+  `Delete` it by id. Be deliberate about what you feed `Add` — don't blindly
+  store unverified model output.
+- **Stale facts coexist with new ones.** If the world changes ("works at Shopify"
+  → "works at Stripe"), both facts can live in the store and both can surface in
+  `Search`. There is no notion of "the current value." If you need that, dedupe
+  or expire at the application layer, or `Delete` superseded facts yourself.
+- **The embedding model is part of the store's identity.** All vectors in one
+  store must come from the same embedding model — query and stored vectors share
+  a space. Changing the embedder against an existing store silently degrades
+  search (no error). Use a fresh store when you change embedders.
+
+These are deliberate v1 tradeoffs (simpler, one LLM call per `Add`). A future
+consolidation pass (ADD/UPDATE/DELETE) can address staleness behind a flag — see
+`PLAN.md` §4.
+
 ## Eval harness
 
 The extraction prompt is versioned (`extractionPromptV1`, …) and scored by the
