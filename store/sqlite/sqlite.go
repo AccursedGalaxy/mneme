@@ -1,0 +1,209 @@
+// Package sqlite is the pure-Go (modernc.org/sqlite, no cgo) default Store for
+// mneme. Embeddings are stored as little-endian float32 BLOBs and cosine
+// similarity is computed in Go over the scope-filtered rows. This is O(n) per
+// scope — correct and simple, fine for thousands of facts. When that hurts,
+// swap in a sqlite-vec or pgvector Store; the pipeline does not change.
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"encoding/binary"
+	"fmt"
+	"math"
+	"sort"
+
+	"github.com/AccursedGalaxy/mneme/store"
+	"github.com/AccursedGalaxy/mneme/types"
+
+	_ "modernc.org/sqlite"
+)
+
+const schema = `
+CREATE TABLE IF NOT EXISTS facts (
+  id          TEXT PRIMARY KEY,
+  text        TEXT NOT NULL,
+  hash        TEXT NOT NULL,
+  embedding   BLOB NOT NULL,
+  user_id     TEXT NOT NULL DEFAULT '',
+  agent_id    TEXT NOT NULL DEFAULT '',
+  run_id      TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(user_id, agent_id, run_id);
+CREATE INDEX IF NOT EXISTS idx_facts_hash  ON facts(user_id, agent_id, run_id, hash);
+`
+
+// Store is a SQLite-backed store.Store.
+type Store struct {
+	db *sql.DB
+}
+
+var _ store.Store = (*Store)(nil)
+
+// Open opens (creating if needed) a SQLite database at path and ensures the
+// schema exists. Use ":memory:" for an ephemeral store. The returned *Store is
+// safe for concurrent use by multiple goroutines.
+func Open(path string) (*Store, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
+	}
+	// modernc's driver serializes access; a single connection avoids
+	// "database is locked" on a file DB under concurrent writes.
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("init schema: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO facts
+		(id, text, hash, embedding, user_id, agent_id, run_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, r := range recs {
+		_, err := stmt.ExecContext(ctx,
+			r.ID, r.Text, r.Hash, encodeVec(r.Embedding),
+			r.Scope.UserID, r.Scope.AgentID, r.Scope.RunID,
+			r.CreatedAt.UTC().Format(timeLayout),
+		)
+		if err != nil {
+			return fmt.Errorf("insert %s: %w", r.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) Search(ctx context.Context, scope types.Scope, vec []float32, k int) ([]types.Hit, error) {
+	if k <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, text, hash, embedding, user_id, agent_id, run_id, created_at
+		 FROM facts WHERE user_id = ? AND agent_id = ? AND run_id = ?`,
+		scope.UserID, scope.AgentID, scope.RunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var hits []types.Hit
+	for rows.Next() {
+		rec, err := scanRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		hits = append(hits, types.Hit{Record: rec, Score: store.Cosine(vec, rec.Embedding)})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Sort by score desc; break ties by created_at then id for determinism.
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Score != hits[j].Score {
+			return hits[i].Score > hits[j].Score
+		}
+		if !hits[i].CreatedAt.Equal(hits[j].CreatedAt) {
+			return hits[i].CreatedAt.After(hits[j].CreatedAt)
+		}
+		return hits[i].ID < hits[j].ID
+	})
+	if len(hits) > k {
+		hits = hits[:k]
+	}
+	return hits, nil
+}
+
+func (s *Store) Get(ctx context.Context, id string) (types.Record, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, text, hash, embedding, user_id, agent_id, run_id, created_at
+		 FROM facts WHERE id = ?`, id)
+	rec, err := scanRecord(row)
+	if err == sql.ErrNoRows {
+		return types.Record{}, fmt.Errorf("fact %q: %w", id, store.ErrNotFound)
+	}
+	return rec, err
+}
+
+func (s *Store) Delete(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM facts WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) ExistingHashes(ctx context.Context, scope types.Scope) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT hash FROM facts WHERE user_id = ? AND agent_id = ? AND run_id = ?`,
+		scope.UserID, scope.AgentID, scope.RunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out[h] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Close() error { return s.db.Close() }
+
+const timeLayout = "2006-01-02T15:04:05.999999999Z07:00" // RFC3339Nano
+
+// scanner is satisfied by both *sql.Row and *sql.Rows.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRecord(sc scanner) (types.Record, error) {
+	var (
+		rec     types.Record
+		blob    []byte
+		created string
+	)
+	if err := sc.Scan(&rec.ID, &rec.Text, &rec.Hash, &blob,
+		&rec.Scope.UserID, &rec.Scope.AgentID, &rec.Scope.RunID, &created); err != nil {
+		return types.Record{}, err
+	}
+	rec.Embedding = decodeVec(blob)
+	t, err := parseTime(created)
+	if err != nil {
+		return types.Record{}, fmt.Errorf("parse created_at %q: %w", created, err)
+	}
+	rec.CreatedAt = t
+	return rec, nil
+}
+
+func encodeVec(v []float32) []byte {
+	b := make([]byte, len(v)*4)
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(f))
+	}
+	return b
+}
+
+func decodeVec(b []byte) []float32 {
+	v := make([]float32, len(b)/4)
+	for i := range v {
+		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return v
+}

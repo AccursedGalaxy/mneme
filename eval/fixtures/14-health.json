@@ -1,0 +1,14 @@
+{
+  "name": "health-fact",
+  "messages": [
+    {"role": "user", "content": "Just so you know, I'm allergic to penicillin and lactose intolerant."}
+  ],
+  "expected_facts": [
+    "The user is allergic to penicillin",
+    "The user is lactose intolerant"
+  ],
+  "required_tokens": ["penicillin", "lactose"],
+  "queries": [
+    {"q": "what is the user allergic to?", "should_recall": ["The user is allergic to penicillin"]}
+  ]
+}

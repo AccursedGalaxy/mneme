@@ -1,0 +1,13 @@
+{
+  "name": "relative-date-grounding",
+  "messages": [
+    {"role": "user", "content": "I started my new role at Stripe last Monday."}
+  ],
+  "expected_facts": [
+    "The user started a new role at Stripe"
+  ],
+  "required_tokens": ["Stripe"],
+  "queries": [
+    {"q": "where did the user start working?", "should_recall": ["The user started a new role at Stripe"]}
+  ]
+}

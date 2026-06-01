@@ -1,0 +1,9 @@
+{
+  "name": "nothing-to-extract",
+  "messages": [
+    {"role": "user", "content": "Hey there! How are you doing today? Thanks so much!"},
+    {"role": "assistant", "content": "I'm doing well, thanks for asking! How can I help?"}
+  ],
+  "expected_facts": [],
+  "skip_dedup": true
+}

@@ -1,0 +1,14 @@
+{
+  "name": "decision",
+  "messages": [
+    {"role": "user", "content": "After a lot of thought, I've decided to quit my job and go to law school in the fall."}
+  ],
+  "expected_facts": [
+    "The user decided to quit their job",
+    "The user decided to go to law school in the fall"
+  ],
+  "required_tokens": ["law school"],
+  "queries": [
+    {"q": "what big decision did the user make?", "should_recall": ["The user decided to go to law school"]}
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "specificity-numbers",
+  "messages": [
+    {"role": "user", "content": "I just finished writing my novel — it's exactly 416 pages and took me 3 years."}
+  ],
+  "expected_facts": [
+    "The user finished writing a novel that is 416 pages long",
+    "The user's novel took 3 years to write"
+  ],
+  "required_tokens": ["416", "3 years"],
+  "queries": [
+    {"q": "how long is the user's novel?", "should_recall": ["The user's novel is 416 pages long"]}
+  ]
+}

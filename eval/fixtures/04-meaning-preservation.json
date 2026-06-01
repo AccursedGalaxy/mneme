@@ -1,0 +1,13 @@
+{
+  "name": "meaning-preservation-negation",
+  "messages": [
+    {"role": "user", "content": "I used to love sushi, but after getting sick last year I can't stand it anymore."}
+  ],
+  "expected_facts": [
+    "The user used to love sushi but no longer likes it after getting sick"
+  ],
+  "required_tokens": ["sushi"],
+  "queries": [
+    {"q": "how does the user feel about sushi?", "should_recall": ["The user no longer likes sushi"]}
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "pronoun-resolution",
+  "messages": [
+    {"role": "user", "content": "I met my manager Diego yesterday."},
+    {"role": "assistant", "content": "How did it go?"},
+    {"role": "user", "content": "He approved my transfer to the Berlin office."}
+  ],
+  "expected_facts": [
+    "The user's manager is named Diego",
+    "Diego approved the user's transfer to the Berlin office"
+  ],
+  "required_tokens": ["Diego", "Berlin"],
+  "queries": [
+    {"q": "who approved the user's transfer?", "should_recall": ["Diego approved the user's transfer to the Berlin office"]}
+  ]
+}

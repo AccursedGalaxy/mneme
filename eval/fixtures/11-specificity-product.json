@@ -1,0 +1,13 @@
+{
+  "name": "specificity-product",
+  "messages": [
+    {"role": "user", "content": "I finally bought the car I wanted — a 2022 Ferrari 488 GTB in rosso red."}
+  ],
+  "expected_facts": [
+    "The user bought a 2022 Ferrari 488 GTB in rosso red"
+  ],
+  "required_tokens": ["Ferrari 488 GTB", "2022", "rosso"],
+  "queries": [
+    {"q": "what car does the user own?", "should_recall": ["The user owns a 2022 Ferrari 488 GTB"]}
+  ]
+}

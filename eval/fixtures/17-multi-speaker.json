@@ -1,0 +1,15 @@
+{
+  "name": "multi-speaker",
+  "messages": [
+    {"role": "user", "name": "Alice", "content": "I'm thinking of buying a house in Austin."},
+    {"role": "user", "name": "Bob", "content": "Nice! I just sold mine in Denver."}
+  ],
+  "expected_facts": [
+    "Alice is thinking of buying a house in Austin",
+    "Bob just sold his house in Denver"
+  ],
+  "required_tokens": ["Austin", "Denver"],
+  "queries": [
+    {"q": "where does Alice want to buy a house?", "should_recall": ["Alice wants to buy a house in Austin"]}
+  ]
+}

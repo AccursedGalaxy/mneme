@@ -1,0 +1,8 @@
+{
+  "name": "question-not-fact",
+  "messages": [
+    {"role": "user", "content": "What's the best way to learn the guitar? Do you have any tips?"}
+  ],
+  "expected_facts": [],
+  "skip_dedup": true
+}

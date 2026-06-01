@@ -1,0 +1,16 @@
+{
+  "name": "multi-topic-three",
+  "messages": [
+    {"role": "user", "content": "I moved to Lisbon in March, I'm learning Portuguese, and I started a new job as a data scientist at Feedzai."}
+  ],
+  "expected_facts": [
+    "The user moved to Lisbon in March",
+    "The user is learning Portuguese",
+    "The user started a new job as a data scientist at Feedzai"
+  ],
+  "required_tokens": ["Lisbon", "Portuguese", "Feedzai", "data scientist"],
+  "queries": [
+    {"q": "what language is the user learning?", "should_recall": ["The user is learning Portuguese"]},
+    {"q": "what is the user's job?", "should_recall": ["The user works as a data scientist at Feedzai"]}
+  ]
+}

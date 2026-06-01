@@ -1,0 +1,13 @@
+{
+  "name": "plans-and-dates",
+  "messages": [
+    {"role": "user", "content": "I'm flying to Tokyo next month for a two-week vacation with my brother."}
+  ],
+  "expected_facts": [
+    "The user plans to fly to Tokyo for a two-week vacation with their brother"
+  ],
+  "required_tokens": ["Tokyo", "two-week"],
+  "queries": [
+    {"q": "what are the user's travel plans?", "should_recall": ["The user is going to Tokyo for a two-week vacation"]}
+  ]
+}
