@@ -71,6 +71,44 @@ func TestInsertGetDelete(t *testing.T) {
 	}
 }
 
+func TestUpdate(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	sc := types.Scope{UserID: "alice"}
+	orig := rec("1", "Alice lives in Seattle", []float32{1, 0, 0}, sc)
+	must(t, s.Insert(ctx, []types.Record{orig}))
+
+	// Update text/hash/embedding; scope + created_at must survive untouched.
+	upd := types.Record{ID: "1", Text: "Alice lives in Austin", Hash: "h-new", Embedding: []float32{0, 1, 0}}
+	if err := s.Update(ctx, upd); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := s.Get(ctx, "1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Text != "Alice lives in Austin" || got.Hash != "h-new" {
+		t.Errorf("text/hash not updated: %+v", got)
+	}
+	if len(got.Embedding) != 3 || got.Embedding[1] != 1 {
+		t.Errorf("embedding not updated: %v", got.Embedding)
+	}
+	if got.Scope != sc {
+		t.Errorf("scope should be preserved by Update: %+v", got.Scope)
+	}
+	if !got.CreatedAt.Equal(orig.CreatedAt) {
+		t.Errorf("created_at should be preserved by Update: got %v want %v", got.CreatedAt, orig.CreatedAt)
+	}
+
+	// Updating a missing id is a no-op, not an error.
+	if err := s.Update(ctx, types.Record{ID: "nope", Text: "x", Hash: "h", Embedding: []float32{1}}); err != nil {
+		t.Errorf("Update missing id should be a no-op: %v", err)
+	}
+	if _, err := s.Get(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("missing-id update must not create a row, got %v", err)
+	}
+}
+
 func TestSearchNearestNeighbourOrder(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

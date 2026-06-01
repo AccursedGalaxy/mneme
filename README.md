@@ -89,14 +89,16 @@ type Memory interface {
 ```
 
 Facts are isolated per `Scope` (`UserID` / `AgentID` / `RunID`) on both write and
-search. The pipeline is **additive**: facts accumulate and are deduped by hash
-and by the extractor's awareness of existing memories — one LLM call per `Add`,
-no update/delete pass in v1.
+search. By default the pipeline is **additive**: facts accumulate and are deduped
+by hash and by the extractor's awareness of existing memories — one LLM call per
+`Add`, no update/delete pass. Pass `WithStrategy(Consolidate)` to add a second
+LLM call that reconciles new facts against existing ones (ADD/UPDATE/DELETE/NONE)
+so changed facts update in place — see below.
 
-### What "additive" means for callers (read this)
+### What the default (additive) strategy means for callers (read this)
 
-v1 **never updates or deletes a fact on its own.** This has consequences you
-must design around:
+By default mneme **never updates or deletes a fact on its own.** This has
+consequences you must design around:
 
 - **Garbage in, garbage forever.** A wrong fact you `Add` is recalled until you
   `Delete` it by id. Be deliberate about what you feed `Add` — don't blindly
@@ -110,9 +112,19 @@ must design around:
   a space. Changing the embedder against an existing store silently degrades
   search (no error). Use a fresh store when you change embedders.
 
-These are deliberate v1 tradeoffs (simpler, one LLM call per `Add`). A future
-consolidation pass (ADD/UPDATE/DELETE) can address staleness behind a flag — see
-`PLAN.md` §4.
+These are deliberate tradeoffs for the default strategy (simpler, one LLM call
+per `Add`). When staleness matters, opt into consolidation:
+
+```go
+m, _ := mneme.New(mneme.WithStrategy(mneme.Consolidate))
+```
+
+Consolidate runs a second LLM call per `Add` that reconciles the new facts
+against the existing ones — UPDATE a changed value in place, DELETE a
+contradicted one, ADD genuinely new facts, leave the rest untouched. It costs the
+extra call (only when there are existing facts in scope to reconcile against) and
+a malformed/failed consolidation response safely falls back to an additive
+insert. See `PLAN-v2.md` §4.2.
 
 ## Eval harness
 

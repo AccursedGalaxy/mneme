@@ -322,19 +322,82 @@ func TestRunOffline(t *testing.T) {
 	}
 }
 
-// TestRunConsolidateNotYet asserts the consolidate strategy is rejected with a
-// clear pointer to §4.2 rather than silently running additive.
-func TestRunConsolidateNotYet(t *testing.T) {
+// TestRunConsolidateStrategy runs the harness end-to-end under the consolidate
+// strategy: a sample whose two sessions change a fact ("Seattle" -> "Austin")
+// must end with the updated answer, proving the strategy is wired through Run.
+func TestRunConsolidateStrategy(t *testing.T) {
+	st, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	llm := &fake.LLM{Responder: func(system, user string) (string, error) {
+		switch {
+		case strings.Contains(user, "Statement A:"): // judge
+			if mentionsBoth(user, "austin") {
+				return "YES", nil
+			}
+			return "NO", nil
+
+		case strings.Contains(system, "answer a QUESTION"): // answerer
+			if strings.Contains(user, "Austin") {
+				return "Austin", nil
+			}
+			if strings.Contains(user, "Seattle") {
+				return "Seattle", nil
+			}
+			return "I don't know.", nil
+
+		case strings.Contains(system, "maintain a person's long-term memory"): // consolidation
+			return `{"memory":[{"id":"0","text":"The user lives in Austin","event":"UPDATE"}]}`, nil
+
+		default: // extractor (read only NEW MESSAGES)
+			nm := user[strings.Index(user, "NEW MESSAGES"):]
+			if strings.Contains(nm, "Austin") {
+				return fake.JSON("The user lives in Austin"), nil
+			}
+			return fake.JSON("The user lives in Seattle"), nil
+		}
+	}}
+
+	samples := []Sample{{
+		ID: "move",
+		Sessions: []Session{
+			{Messages: turn("user", "I live in Seattle")},
+			{Messages: turn("user", "I moved to Austin")},
+		},
+		Questions: []QAPair{{Question: "Where does the user live?", Answer: "Austin", Category: "temporal"}},
+	}}
+
+	report, err := Run(context.Background(), samples, Config{
+		LLM:      llm,
+		Embedder: &fake.Embedder{D: 64},
+		Store:    st,
+		Strategy: StrategyConsolidate,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Strategy != StrategyConsolidate {
+		t.Errorf("report strategy = %q, want consolidate", report.Strategy)
+	}
+	if len(report.Results) != 1 || !report.Results[0].EM {
+		t.Errorf("consolidate run should answer the updated fact exactly: %+v", report.Results)
+	}
+}
+
+func TestRunUnknownStrategy(t *testing.T) {
 	st, _ := sqlite.Open(":memory:")
 	defer st.Close()
 	_, err := Run(context.Background(), nil, Config{
 		LLM:      &fake.LLM{Default: `{"memory":[]}`},
 		Embedder: &fake.Embedder{D: 64},
 		Store:    st,
-		Strategy: StrategyConsolidate,
+		Strategy: "bogus",
 	})
-	if err == nil || !strings.Contains(err.Error(), "4.2") {
-		t.Errorf("want a not-implemented error mentioning §4.2, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unknown strategy") {
+		t.Errorf("want an unknown-strategy error, got %v", err)
 	}
 }
 

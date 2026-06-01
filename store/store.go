@@ -19,6 +19,12 @@ type Store interface {
 	// Insert writes records. It is the caller's job to have deduped first.
 	Insert(ctx context.Context, recs []types.Record) error
 
+	// Update replaces an existing record's text, hash and embedding (matched by
+	// id), leaving its scope and creation time intact. It is used by the
+	// consolidation strategy's UPDATE op (mneme.WithStrategy(Consolidate)).
+	// Updating a missing id is not an error.
+	Update(ctx context.Context, rec types.Record) error
+
 	// Search returns up to k records in the given scope ranked by cosine
 	// similarity to vec, highest first.
 	Search(ctx context.Context, scope types.Scope, vec []float32, k int) ([]types.Hit, error)

@@ -85,6 +85,107 @@ func systemPrompt(version string) string {
 	return promptVersions[DefaultPromptVersion]
 }
 
+// consolidationPromptV1 is mneme's own consolidation system prompt, used under
+// WithStrategy(Consolidate). It reimplements the idea of mem0's ADD/UPDATE/
+// DELETE/NONE reconciliation in our own words (orientation only — see PLAN.md
+// §5). It is versioned exactly like the extraction prompt so a change is a
+// measured decision.
+//
+// It lives in its own registry (consolidationPrompts), NOT in promptVersions:
+// promptVersions is iterated by the eval harness as *extraction* system prompts,
+// so mixing a consolidation prompt into it would make eval score this prompt as
+// an extractor. Same versioning mechanism, separate namespace.
+const consolidationPromptV1 = `You maintain a person's long-term memory.
+
+You are given the CURRENT MEMORIES (each with a numeric id) and a set of NEW
+FACTS just extracted from a conversation. Decide how the new facts change the
+stored memory, and output one operation per change.
+
+EVENTS (choose exactly one per operation):
+- ADD: the new fact is genuinely new information not covered by any current
+  memory. Use id "new" and put the new fact in "text".
+- UPDATE: the new fact changes the value of an existing memory — a move, a new
+  job, a changed preference, a corrected or newly precise detail. Reference the
+  existing memory's id and write the full corrected fact in "text". Prefer
+  UPDATE over deleting and re-adding when the same underlying fact changed.
+- DELETE: an existing memory is explicitly contradicted or made obsolete by the
+  new facts and must be removed. Reference its id.
+- NONE: an existing memory is unaffected, or a new fact merely restates
+  something already known. This makes no change.
+
+RULES
+- Only emit operations that change something. A current memory the new facts do
+  not touch should simply be left alone (you may omit it, or mark it NONE).
+- Never invent ids. UPDATE, DELETE and NONE must reference an id that appears in
+  CURRENT MEMORIES exactly. ADD must use the literal id "new".
+- DELETE only on real contradiction or obsolescence — never just because two
+  facts are about a similar topic.
+- Each resulting fact must stay self-contained and specific: resolve pronouns to
+  names, keep proper nouns, quantities and dates — the same standard as
+  extraction.
+
+OUTPUT
+Return ONLY a JSON object, no prose and no code fences, in exactly this shape:
+{"memory":[{"id":"<int|new>","text":"<the resulting fact>","event":"ADD|UPDATE|DELETE|NONE"}]}
+If nothing should change, return {"memory":[]}.`
+
+// DefaultConsolidationVersion is the consolidation prompt version used unless
+// WithConsolidationVersion overrides it.
+const DefaultConsolidationVersion = "v1"
+
+// consolidationPrompts maps a version name to its consolidation system prompt.
+// Separate from promptVersions on purpose (see consolidationPromptV1).
+var consolidationPrompts = map[string]string{
+	"v1": consolidationPromptV1,
+}
+
+// ConsolidationPromptVersions returns the registered consolidation prompt
+// version names (unordered).
+func ConsolidationPromptVersions() []string {
+	out := make([]string, 0, len(consolidationPrompts))
+	for k := range consolidationPrompts {
+		out = append(out, k)
+	}
+	return out
+}
+
+// consolidationSystemPrompt returns the consolidation system prompt for a
+// version, falling back to the default when the version is unknown or empty.
+func consolidationSystemPrompt(version string) string {
+	if p, ok := consolidationPrompts[version]; ok {
+		return p
+	}
+	return consolidationPrompts[DefaultConsolidationVersion]
+}
+
+// buildConsolidationUser assembles the user-message half of the consolidation
+// call: the integer-labelled current memories and the newly extracted facts.
+// The durable instructions live in consolidationPromptV1 (the system message).
+func buildConsolidationUser(current []labeledMemory, candidates []extractedFact) string {
+	var b strings.Builder
+
+	b.WriteString("CURRENT MEMORIES (id: fact):\n")
+	if len(current) == 0 {
+		b.WriteString("(none)\n")
+	} else {
+		for _, m := range current {
+			fmt.Fprintf(&b, "%s: %s\n", m.ID, m.Text)
+		}
+	}
+	b.WriteString("\n")
+
+	b.WriteString("NEW FACTS (just extracted from the conversation):\n")
+	if len(candidates) == 0 {
+		b.WriteString("(none)\n")
+	} else {
+		for _, c := range candidates {
+			fmt.Fprintf(&b, "- %s\n", c.Text)
+		}
+	}
+
+	return b.String()
+}
+
 // labeledMemory is an existing fact shown to the extractor under a small integer
 // id. The integer relabel (real UUID -> "0","1",...) is a load-bearing
 // anti-hallucination trick: LLMs copy long UUIDs unreliably, so we never put

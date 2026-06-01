@@ -24,6 +24,7 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 	// 1+2. Retrieve existing memories in scope, ranked by relevance to the
 	// incoming conversation, to show the extractor for dedup/linking.
 	var existing []labeledMemory
+	var idMap map[string]string
 	if m.extractionTopK > 0 {
 		qvec, err := m.embedOne(ctx, convText)
 		if err != nil {
@@ -33,10 +34,10 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 		if err != nil {
 			return nil, fmt.Errorf("retrieve existing memories: %w", err)
 		}
-		// 3. Anti-hallucination relabel: real UUIDs -> "0","1",... The map is
-		// kept even though additive mode does not reference existing ids back,
-		// preserving the seam for a future update/delete pass.
-		existing, _ = relabelExisting(hits)
+		// 3. Anti-hallucination relabel: real UUIDs -> "0","1",... The reverse
+		// map (integer id -> UUID) is what the consolidation pass uses to apply
+		// UPDATE/DELETE back to the right record; additive mode ignores it.
+		existing, idMap = relabelExisting(hits)
 	}
 
 	// 4. Extract (one LLM call) with our versioned prompt.
@@ -53,17 +54,29 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 		return nil, nil
 	}
 
-	// 7. Dedup by hash against the batch and what is already stored in scope.
+	// 6. Reconcile and persist. Consolidation needs existing facts to reconcile
+	// against; with none in scope there is nothing to UPDATE/DELETE, so we save
+	// the second LLM call and fall through to the additive insert.
+	if m.strategy == Consolidate && len(existing) > 0 {
+		return m.consolidate(ctx, scope, existing, idMap, extracted)
+	}
+	return m.insertNew(ctx, scope, extracted)
+}
+
+// insertNew is the additive write path (PLAN.md §4 steps 6–9): hash-dedup the
+// candidates against the batch and what is already stored in scope, embed the
+// survivors in one batch, and insert them. It returns the newly written facts.
+// Consolidation falls back to this when its LLM response is unusable.
+func (m *memory) insertNew(ctx context.Context, scope Scope, candidates []extractedFact) ([]Fact, error) {
 	existingHashes, err := m.store.ExistingHashes(ctx, scope)
 	if err != nil {
 		return nil, fmt.Errorf("load existing hashes: %w", err)
 	}
-	kept, hashes := dedup(extracted, existingHashes)
+	kept, hashes := dedup(candidates, existingHashes)
 	if len(kept) == 0 {
 		return nil, nil
 	}
 
-	// 6. Embed the survivors in one batch.
 	texts := make([]string, len(kept))
 	for i, f := range kept {
 		texts[i] = f.Text
@@ -76,7 +89,6 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 		return nil, fmt.Errorf("embedder returned %d vectors for %d facts", len(vecs), len(kept))
 	}
 
-	// 8. Persist.
 	now := m.clock()
 	recs := make([]types.Record, len(kept))
 	facts := make([]Fact, len(kept))
@@ -98,8 +110,112 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 	if err := m.store.Insert(ctx, recs); err != nil {
 		return nil, fmt.Errorf("persist facts: %w", err)
 	}
+	return facts, nil
+}
 
-	// 9. Return the newly written facts.
+// consolidate is the second LLM call of the Consolidate strategy: it asks the
+// model how the candidate facts change the existing memories (ADD/UPDATE/DELETE/
+// NONE), then applies those operations, mapping the prompt's integer ids back to
+// real UUIDs via idMap. A malformed/empty response falls back to an additive
+// insert of the candidates — never a corrupted store. It returns the facts that
+// were added or updated (the changes); deletes and no-ops are not returned.
+func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labeledMemory, idMap map[string]string, candidates []extractedFact) ([]Fact, error) {
+	system := consolidationSystemPrompt(m.consolidationVersion)
+	user := buildConsolidationUser(existing, candidates)
+	raw, err := m.llm.Complete(ctx, system, user, true)
+	if err != nil {
+		// The consolidation call failed (transient API error, empty/truncated
+		// body, etc.). The candidates are already extracted, so degrade to an
+		// additive insert rather than failing the caller's Add — a stale fact
+		// left un-reconciled is recoverable on a later Add; a failed Add loses
+		// the data. Never corrupt the store. (Same doctrine as a malformed
+		// response below.)
+		return m.insertNew(ctx, scope, candidates)
+	}
+
+	ops := parseConsolidation(raw)
+	if len(ops) == 0 {
+		// Unusable response: do no harm, behave like additive.
+		return m.insertNew(ctx, scope, candidates)
+	}
+
+	// Partition ops into writes (ADD/UPDATE — both need an embedding) and
+	// deletes. An UPDATE whose id does not resolve to a real record is treated
+	// as an ADD: the text is still new information, and we never invent a target.
+	type write struct {
+		uuid string // "" => ADD (new uuid assigned at insert); else UPDATE target
+		text string
+	}
+	var writes []write
+	var deleteIDs []string
+	for _, op := range ops {
+		switch op.Event {
+		case "ADD":
+			writes = append(writes, write{text: op.Text})
+		case "UPDATE":
+			writes = append(writes, write{uuid: idMap[op.ID], text: op.Text}) // idMap miss => "" => ADD
+		case "DELETE":
+			if uuid, ok := idMap[op.ID]; ok {
+				deleteIDs = append(deleteIDs, uuid)
+			}
+		case "NONE":
+			// leave the existing memory as is
+		}
+	}
+
+	// Embed all write texts in one batch.
+	var facts []Fact
+	if len(writes) > 0 {
+		texts := make([]string, len(writes))
+		for i, w := range writes {
+			texts[i] = w.text
+		}
+		vecs, err := m.embedder.Embed(ctx, texts)
+		if err != nil {
+			return nil, fmt.Errorf("embed consolidated facts: %w", err)
+		}
+		if len(vecs) != len(writes) {
+			return nil, fmt.Errorf("embedder returned %d vectors for %d writes", len(vecs), len(writes))
+		}
+
+		now := m.clock()
+		var inserts []types.Record
+		for i, w := range writes {
+			rec := types.Record{
+				Text:      w.text,
+				Hash:      hashText(w.text),
+				Embedding: vecs[i],
+				Scope:     scope,
+				CreatedAt: now,
+			}
+			if w.uuid == "" {
+				id, err := newUUID()
+				if err != nil {
+					return nil, fmt.Errorf("generate id: %w", err)
+				}
+				rec.ID = id
+				inserts = append(inserts, rec)
+			} else {
+				rec.ID = w.uuid
+				if err := m.store.Update(ctx, rec); err != nil {
+					return nil, fmt.Errorf("apply UPDATE: %w", err)
+				}
+			}
+			facts = append(facts, recordToFact(rec, 0))
+		}
+		if len(inserts) > 0 {
+			if err := m.store.Insert(ctx, inserts); err != nil {
+				return nil, fmt.Errorf("apply ADDs: %w", err)
+			}
+		}
+	}
+
+	for _, id := range deleteIDs {
+		if err := m.store.Delete(ctx, id); err != nil {
+			return nil, fmt.Errorf("apply DELETE %s: %w", id, err)
+		}
+	}
+
 	return facts, nil
 }
 

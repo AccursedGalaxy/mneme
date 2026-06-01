@@ -24,11 +24,30 @@ type (
 // for dedup/linking when WithExtractionTopK is not set.
 const DefaultExtractionTopK = 10
 
+// Strategy selects how Add reconciles newly extracted facts with what is already
+// stored in scope.
+type Strategy int
+
+const (
+	// Additive keeps every fact forever: extract, hash-dedup, insert. This is
+	// v1's behavior and the default — one LLM call per Add.
+	Additive Strategy = iota
+	// Consolidate runs a second LLM call that decides, per existing fact,
+	// whether the new facts ADD, UPDATE, DELETE or leave it (NONE) — so a
+	// changed fact ("moved from Seattle to Austin") replaces the stale one
+	// instead of piling up beside it. Costs a second LLM call per Add, and only
+	// when there are existing facts in scope to reconcile against.
+	Consolidate
+)
+
 // Memory is the top-level handle an agent holds. It is safe for concurrent use
 // to the extent its underlying store, LLM and embedder are.
 type Memory interface {
-	// Add ingests messages, extracts durable facts, dedups, and stores them.
-	// It returns the facts that were newly written (after dedup).
+	// Add ingests messages, extracts durable facts, and stores them. Under the
+	// default Additive strategy it dedups and inserts, returning the newly
+	// written facts. Under WithStrategy(Consolidate) it reconciles against
+	// existing facts (ADD/UPDATE/DELETE/NONE), returning the facts that were
+	// added or updated.
 	Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, error)
 
 	// Search returns the top-k facts most relevant to query within scope,
@@ -48,12 +67,14 @@ type Memory interface {
 // memory is the concrete Memory implementation wiring a store, an LLM and an
 // embedder through the additive pipeline (see pipeline.go).
 type memory struct {
-	store          store.Store
-	llm            provider.LLM
-	embedder       provider.Embedder
-	extractionTopK int
-	promptVersion  string
-	clock          func() time.Time
+	store                store.Store
+	llm                  provider.LLM
+	embedder             provider.Embedder
+	extractionTopK       int
+	promptVersion        string
+	strategy             Strategy
+	consolidationVersion string
+	clock                func() time.Time
 }
 
 var _ Memory = (*memory)(nil)
@@ -85,14 +106,26 @@ func WithExtractionTopK(n int) Option {
 // WithPromptVersion selects the extraction prompt version (see PromptVersions).
 func WithPromptVersion(v string) Option { return func(m *memory) { m.promptVersion = v } }
 
+// WithStrategy selects the write strategy (Additive, the default, or
+// Consolidate). See Strategy.
+func WithStrategy(s Strategy) Option { return func(m *memory) { m.strategy = s } }
+
+// WithConsolidationVersion selects the consolidation prompt version, used only
+// under WithStrategy(Consolidate) (see ConsolidationPromptVersions).
+func WithConsolidationVersion(v string) Option {
+	return func(m *memory) { m.consolidationVersion = v }
+}
+
 // New constructs a Memory. Any of the store, LLM and embedder not supplied via
 // options are built from the MNEME_* environment (see PLAN.md §8). It returns an
 // error if a required provider can be neither supplied nor built.
 func New(opts ...Option) (Memory, error) {
 	m := &memory{
-		extractionTopK: DefaultExtractionTopK,
-		promptVersion:  DefaultPromptVersion,
-		clock:          time.Now,
+		extractionTopK:       DefaultExtractionTopK,
+		promptVersion:        DefaultPromptVersion,
+		strategy:             Additive,
+		consolidationVersion: DefaultConsolidationVersion,
+		clock:                time.Now,
 	}
 	for _, opt := range opts {
 		opt(m)

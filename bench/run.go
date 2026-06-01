@@ -11,12 +11,24 @@ import (
 )
 
 // Strategy names the memory-write strategy under test. Additive is v1's
-// keep-everything pipeline; Consolidate (PLAN-v2.md §4.2) is built next and the
-// harness already accepts its name so the runner's flag is stable.
+// keep-everything pipeline; Consolidate (PLAN-v2.md §4.2) runs the second LLM
+// call that UPDATEs/DELETEs stale facts.
 const (
 	StrategyAdditive    = "additive"
 	StrategyConsolidate = "consolidate"
 )
+
+// mnemeStrategy maps the harness's strategy name to the library's Strategy enum.
+func mnemeStrategy(name string) (mneme.Strategy, error) {
+	switch name {
+	case StrategyAdditive:
+		return mneme.Additive, nil
+	case StrategyConsolidate:
+		return mneme.Consolidate, nil
+	default:
+		return 0, fmt.Errorf("unknown strategy %q (want %s|%s)", name, StrategyAdditive, StrategyConsolidate)
+	}
+}
 
 // Config holds everything Run needs: the providers under test, the store, the
 // answer/judge models, search depth, prompt versions, and the write strategy.
@@ -53,10 +65,9 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 	if cfg.Strategy == "" {
 		cfg.Strategy = StrategyAdditive
 	}
-	if cfg.Strategy != StrategyAdditive {
-		// Consolidation is PLAN-v2.md §4.2 — the next task. The flag is accepted
-		// so cmd/bench's surface is stable, but only additive runs today.
-		return Report{}, fmt.Errorf("strategy %q not implemented yet (additive only; see PLAN-v2.md §4.2)", cfg.Strategy)
+	strategy, err := mnemeStrategy(cfg.Strategy)
+	if err != nil {
+		return Report{}, err
 	}
 
 	answerLLM := cfg.AnswerLLM
@@ -72,6 +83,7 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 		mneme.WithStore(cfg.Store),
 		mneme.WithLLM(cfg.LLM),
 		mneme.WithEmbedder(cfg.Embedder),
+		mneme.WithStrategy(strategy),
 	)
 	if err != nil {
 		return Report{}, fmt.Errorf("build memory: %w", err)

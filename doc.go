@@ -17,7 +17,11 @@
 //	m.Add(ctx, []mneme.Message{{Role: "user", Content: "I drive a Ferrari 488 GTB"}}, scope)
 //	hits, _ := m.Search(ctx, "what car does the user own?", scope, 5)
 //
-// The pipeline is additive: facts accumulate and are deduped by hash and by the
-// extractor's own awareness of existing memories; there is no update/delete LLM
-// pass in v1. See PLAN.md for the full design.
+// By default the pipeline is additive: facts accumulate and are deduped by hash
+// and by the extractor's own awareness of existing memories. Pass
+// WithStrategy(Consolidate) to instead run a second LLM call that reconciles new
+// facts against existing ones (ADD/UPDATE/DELETE/NONE), so a changed fact
+// ("moved from Seattle to Austin") updates the stale one in place rather than
+// piling up beside it — at the cost of one extra LLM call per Add. See PLAN.md
+// (v1 additive design) and PLAN-v2.md §4.2 (consolidation) for the full design.
 package mneme

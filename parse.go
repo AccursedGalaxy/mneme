@@ -56,6 +56,79 @@ func tryEnvelope(s string) ([]extractedFact, bool) {
 	return nil, false
 }
 
+// consolidationOp is one operation the consolidation LLM returns: an event and
+// the fact it applies to. id is an existing memory's integer label (for
+// UPDATE/DELETE/NONE) or the literal "new" (for ADD).
+type consolidationOp struct {
+	ID    string `json:"id"`
+	Text  string `json:"text"`
+	Event string `json:"event"`
+}
+
+// consolidationEnvelope is the documented consolidation response shape:
+// {"memory":[{"id","text","event"}]}.
+type consolidationEnvelope struct {
+	Memory []consolidationOp `json:"memory"`
+}
+
+// valid consolidation events, normalized to upper case.
+var consolidationEvents = map[string]struct{}{
+	"ADD": {}, "UPDATE": {}, "DELETE": {}, "NONE": {},
+}
+
+// parseConsolidation pulls the operation list out of a raw consolidation
+// response defensively, mirroring parseExtraction (fences, embedded object,
+// bare array). On any unrecoverable failure it returns nil, so the pipeline can
+// fall back to an additive insert rather than corrupt the store.
+func parseConsolidation(raw string) []consolidationOp {
+	s := stripFences(raw)
+
+	if ops, ok := tryConsolidationEnvelope(s); ok {
+		return cleanOps(ops)
+	}
+	if obj := firstBalanced(s, '{', '}'); obj != "" {
+		if ops, ok := tryConsolidationEnvelope(obj); ok {
+			return cleanOps(ops)
+		}
+	}
+	if arr := firstBalanced(s, '[', ']'); arr != "" {
+		var ops []consolidationOp
+		if err := json.Unmarshal([]byte(arr), &ops); err == nil {
+			return cleanOps(ops)
+		}
+	}
+	return nil
+}
+
+func tryConsolidationEnvelope(s string) ([]consolidationOp, bool) {
+	var env consolidationEnvelope
+	if err := json.Unmarshal([]byte(s), &env); err == nil && env.Memory != nil {
+		return env.Memory, true
+	}
+	return nil, false
+}
+
+// cleanOps normalizes events to upper case, trims text, and drops operations
+// that cannot be applied: unknown events, and ADD/UPDATE with empty text (a
+// DELETE/NONE needs no text). This keeps a sloppy model response from producing
+// junk or empty facts.
+func cleanOps(ops []consolidationOp) []consolidationOp {
+	var out []consolidationOp
+	for _, op := range ops {
+		op.Event = strings.ToUpper(strings.TrimSpace(op.Event))
+		op.Text = strings.TrimSpace(op.Text)
+		op.ID = strings.TrimSpace(op.ID)
+		if _, ok := consolidationEvents[op.Event]; !ok {
+			continue
+		}
+		if (op.Event == "ADD" || op.Event == "UPDATE") && op.Text == "" {
+			continue
+		}
+		out = append(out, op)
+	}
+	return out
+}
+
 // clean drops items with empty text and trims surrounding whitespace, so a
 // model that emits {"text":""} or stray spaces does not create junk facts.
 func clean(facts []extractedFact) []extractedFact {
