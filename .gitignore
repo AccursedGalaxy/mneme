@@ -1,0 +1,14 @@
+# secrets
+.env
+CLAUDE.md
+
+# Go
+/bin/
+*.out
+*.test
+__debug_bin*
+
+# local data / sqlite files
+*.db
+*.db-*
+*.sqlite
