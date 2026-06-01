@@ -1,0 +1,15 @@
+{
+  "name": "preferences",
+  "messages": [
+    {"role": "user", "content": "I'm vegetarian and I really prefer aisle seats when I fly."}
+  ],
+  "expected_facts": [
+    "The user is vegetarian",
+    "The user prefers aisle seats when flying"
+  ],
+  "required_tokens": ["vegetarian", "aisle"],
+  "queries": [
+    {"q": "what are the user's dietary restrictions?", "should_recall": ["The user is vegetarian"]},
+    {"q": "what seat does the user like on planes?", "should_recall": ["The user prefers aisle seats when flying"]}
+  ]
+}

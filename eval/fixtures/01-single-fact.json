@@ -1,0 +1,13 @@
+{
+  "name": "single-fact",
+  "messages": [
+    {"role": "user", "content": "I work as a registered nurse at Mount Sinai Hospital."}
+  ],
+  "expected_facts": [
+    "The user works as a registered nurse at Mount Sinai Hospital"
+  ],
+  "required_tokens": ["Mount Sinai", "registered nurse"],
+  "queries": [
+    {"q": "where does the user work?", "should_recall": ["The user works at Mount Sinai Hospital as a registered nurse"]}
+  ]
+}

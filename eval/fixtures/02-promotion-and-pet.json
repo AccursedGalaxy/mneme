@@ -1,0 +1,15 @@
+{
+  "name": "promotion-and-pet",
+  "messages": [
+    {"role": "user", "content": "I got promoted to Senior Engineer at Shopify. Also adopted a beagle named Max."}
+  ],
+  "expected_facts": [
+    "The user was promoted to Senior Engineer at Shopify",
+    "The user adopted a beagle named Max"
+  ],
+  "required_tokens": ["Shopify", "Senior Engineer", "beagle", "Max"],
+  "queries": [
+    {"q": "where does the user work?", "should_recall": ["The user was promoted to Senior Engineer at Shopify"]},
+    {"q": "does the user have pets?", "should_recall": ["The user adopted a beagle named Max"]}
+  ]
+}

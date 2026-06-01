@@ -1,0 +1,13 @@
+{
+  "name": "meaning-preservation-direction",
+  "messages": [
+    {"role": "user", "content": "My company was acquired by Google — we didn't acquire them, to be clear."}
+  ],
+  "expected_facts": [
+    "The user's company was acquired by Google"
+  ],
+  "required_tokens": ["Google"],
+  "queries": [
+    {"q": "what happened to the user's company?", "should_recall": ["The user's company was acquired by Google"]}
+  ]
+}

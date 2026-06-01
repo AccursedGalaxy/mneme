@@ -1,0 +1,12 @@
+{
+  "name": "no-fabrication",
+  "messages": [
+    {"role": "user", "content": "I bought a new laptop today."}
+  ],
+  "expected_facts": [
+    "The user bought a new laptop"
+  ],
+  "queries": [
+    {"q": "what did the user buy?", "should_recall": ["The user bought a new laptop"]}
+  ]
+}

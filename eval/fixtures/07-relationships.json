@@ -1,0 +1,15 @@
+{
+  "name": "relationships",
+  "messages": [
+    {"role": "user", "content": "My wife Sarah is a pediatrician, and our daughter Emma just turned 7."}
+  ],
+  "expected_facts": [
+    "The user's wife is named Sarah and is a pediatrician",
+    "The user's daughter is named Emma and just turned 7"
+  ],
+  "required_tokens": ["Sarah", "pediatrician", "Emma"],
+  "queries": [
+    {"q": "what does the user's wife do?", "should_recall": ["The user's wife Sarah is a pediatrician"]},
+    {"q": "how old is the user's daughter?", "should_recall": ["The user's daughter Emma is 7 years old"]}
+  ]
+}
