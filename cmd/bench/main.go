@@ -133,7 +133,15 @@ func run() error {
 		printAnswers(report)
 	}
 
-	md := render(report, *dataset, *path, *model, *embedKind)
+	md := render(report, runMeta{
+		dataset:  *dataset,
+		path:     *path,
+		model:    *model,
+		embedder: *embedKind,
+		limit:    *limit,
+		maxQ:     *maxQ,
+		samples:  len(samples),
+	})
 	fmt.Print(md)
 
 	if *out != "" {
@@ -194,14 +202,37 @@ func loadDataset(dataset, path string) ([]bench.Sample, error) {
 	}
 }
 
+// runMeta carries the run parameters render needs to print a reproduce command
+// and the honesty caveats for bounded runs.
+type runMeta struct {
+	dataset, path, model, embedder string
+	limit, maxQ, samples           int
+}
+
 // render builds the human + markdown report: a per-category table (the lever
-// finder) followed by the bold overall row, plus run metadata.
-func render(report bench.Report, dataset, path, model, embedder string) string {
+// finder) followed by the bold overall row, plus run metadata, a reproduce
+// command, and — when the run was bounded — a caveat so a sampled number is
+// never mistaken for the full distribution-weighted baseline.
+func render(report bench.Report, m runMeta) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# mneme bench results — %s\n\n", dataset)
+	fmt.Fprintf(&b, "# mneme bench results — %s\n\n", m.dataset)
 	fmt.Fprintf(&b, "dataset: `%s`  ·  model: `%s`  ·  embedder: `%s`  ·  k: %d  ·  strategy: `%s`\n\n",
-		path, model, embedder, report.K, report.Strategy)
+		m.path, m.model, m.embedder, report.K, report.Strategy)
 	fmt.Fprintf(&b, "Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.\n\n")
+
+	bounded := m.limit > 0 || m.maxQ > 0
+	if bounded {
+		fmt.Fprintf(&b, "> ⚠️ **Bounded run — not the full benchmark.** ")
+		var parts []string
+		if m.limit > 0 {
+			parts = append(parts, fmt.Sprintf("first %d samples", m.limit))
+		}
+		if m.maxQ > 0 {
+			parts = append(parts, fmt.Sprintf("≤%d category-balanced questions/sample", m.maxQ))
+		}
+		fmt.Fprintf(&b, "%s (%d samples scored). Per-category n is equalized by the balanced cap, so the **overall** row is a flat mean across categories, NOT weighted by LoCoMo's true distribution (single-hop dominates the real set). Use this to track per-category movement; for the distribution-weighted headline, drop `-maxq`/`-limit`.\n\n",
+			strings.Join(parts, ", "), m.samples)
+	}
 
 	fmt.Fprintf(&b, "| category | n | EM | F1 | judge |\n")
 	fmt.Fprintf(&b, "|---|---|---|---|---|\n")
@@ -210,6 +241,16 @@ func render(report bench.Report, dataset, path, model, embedder string) string {
 	}
 	o := report.Overall()
 	fmt.Fprintf(&b, "| **overall** | **%d** | **%.2f** | **%.2f** | **%.2f** |\n", o.N, o.EM, o.F1, o.Judge)
+
+	fmt.Fprintf(&b, "\n## Reproduce\n\n```sh\ngo run ./cmd/bench -dataset %s -path %s -k %d -strategy %s",
+		m.dataset, m.path, report.K, report.Strategy)
+	if m.limit > 0 {
+		fmt.Fprintf(&b, " -limit %d", m.limit)
+	}
+	if m.maxQ > 0 {
+		fmt.Fprintf(&b, " -maxq %d", m.maxQ)
+	}
+	b.WriteString("\n```\n")
 	return b.String()
 }
 
