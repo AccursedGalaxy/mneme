@@ -11,8 +11,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/AccursedGalaxy/mneme/store"
 	"github.com/AccursedGalaxy/mneme/types"
@@ -58,19 +60,46 @@ var _ store.Store = (*Store)(nil)
 // Open opens (creating if needed) a SQLite database at path and ensures the
 // schema exists. Use ":memory:" for an ephemeral store. The returned *Store is
 // safe for concurrent use by multiple goroutines.
+//
+// File-backed databases run in WAL mode (PRAGMA journal_mode=WAL) so reads run
+// concurrently with a single writer — the read-heavy access pattern of an agent
+// hitting memory every turn. busy_timeout lets a contended writer wait rather
+// than fail immediately with "database is locked". An in-memory database stays
+// pinned to a single connection: each connection to ":memory:" is its own
+// private database, so a pool would hand out separate empty stores.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	mem := isMemoryPath(path)
+	db, err := sql.Open("sqlite", dsn(path, mem))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
-	// modernc's driver serializes access; a single connection avoids
-	// "database is locked" on a file DB under concurrent writes.
-	db.SetMaxOpenConns(1)
+	if mem {
+		db.SetMaxOpenConns(1)
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+// isMemoryPath reports whether path names an in-memory database, which SQLite
+// scopes to a single connection unless a shared cache is requested explicitly.
+func isMemoryPath(path string) bool {
+	return path == ":memory:" || strings.Contains(path, ":memory:") || strings.Contains(path, "mode=memory")
+}
+
+// dsn builds the modernc.org/sqlite connection string. File databases get WAL
+// and busy_timeout pragmas applied per-connection (so every pooled connection
+// inherits them); in-memory and pre-formatted DSNs are passed through unchanged.
+func dsn(path string, mem bool) string {
+	if mem || strings.HasPrefix(path, "file:") {
+		return path
+	}
+	q := url.Values{}
+	q.Add("_pragma", "journal_mode(WAL)")
+	q.Add("_pragma", "busy_timeout(5000)")
+	return "file:" + path + "?" + q.Encode()
 }
 
 func (s *Store) Insert(ctx context.Context, recs []types.Record) error {

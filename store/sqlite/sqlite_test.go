@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -232,6 +234,79 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 	if got.Text != "persisted" {
 		t.Errorf("lost data across reopen: %+v", got)
+	}
+}
+
+// TestWALModeEnabled pins the access mode of a file-backed store: WAL lets
+// readers run concurrently with a single writer, and busy_timeout keeps a
+// contended writer waiting instead of failing immediately.
+func TestWALModeEnabled(t *testing.T) {
+	s := newStore(t) // newStore uses a real temp-file path, not :memory:
+	ctx := context.Background()
+
+	var jm string
+	if err := s.db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&jm); err != nil {
+		t.Fatalf("query journal_mode: %v", err)
+	}
+	if jm != "wal" {
+		t.Errorf("journal_mode = %q, want wal", jm)
+	}
+
+	var bt int
+	if err := s.db.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&bt); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if bt != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", bt)
+	}
+}
+
+// TestConcurrentReadsAndWrites is the payoff of WAL: many readers proceed while
+// a writer commits, with no "database is locked". Before WAL this Store pinned
+// itself to a single connection to dodge that error; now the pool is open and
+// busy_timeout absorbs writer contention. The race detector guards the test.
+func TestConcurrentReadsAndWrites(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	sc := types.Scope{UserID: "alice"}
+	must(t, s.Insert(ctx, []types.Record{rec("seed", "seed fact", []float32{1, 0}, sc)}))
+
+	var wg sync.WaitGroup
+	errc := make(chan error, 32)
+
+	// Readers hammer Search concurrently.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				if _, err := s.Search(ctx, sc, []float32{1, 0}, 5); err != nil {
+					errc <- err
+					return
+				}
+			}
+		}()
+	}
+	// Writers insert distinct facts concurrently with the readers.
+	for i := 0; i < 4; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				id := strconv.Itoa(i*100 + j)
+				if err := s.Insert(ctx, []types.Record{rec(id, "f"+id, []float32{0, 1}, sc)}); err != nil {
+					errc <- err
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errc)
+	for err := range errc {
+		t.Fatalf("concurrent access error: %v", err)
 	}
 }
 
