@@ -1,0 +1,67 @@
+name: Eval regression gate
+
+# The eval harness scores the extraction prompt against live LLM fixtures, so it
+# needs network, an API key and a few cents per run — it cannot live in the
+# offline `go test ./...`. Instead it runs here on demand and weekly, enforcing
+# the documented invariant: every prompt version must hold the aggregate bar
+# recorded in eval/RESULTS.md (baseline 0.97 for v1). A regressing version exits
+# the job non-zero via `cmd/eval -min-aggregate`.
+#
+# The bar is a regression *floor*, not the exact baseline: the eval scores
+# against a live LLM, so the aggregate has run-to-run noise (≈0.97 ± ~0.01). The
+# default 0.95 leaves headroom for that noise while still catching any prompt
+# change that materially degrades extraction. Tighten it via the manual input.
+#
+# Requires the repository secret OPENROUTER_API_KEY. The job no-ops (does not
+# fail) on forks / when the secret is absent, so it never blocks outside PRs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_aggregate:
+        description: "Minimum aggregate every prompt version must meet"
+        required: false
+        default: "0.95"
+  schedule:
+    # Mondays 06:00 UTC — catches drift in the upstream model/embedder.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: prompt eval
+    runs-on: ubuntu-latest
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for API key
+        id: gate
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "OPENROUTER_API_KEY not set — skipping eval (no secret available)."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run eval with regression gate
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          go run ./cmd/eval \
+            -embedder openai \
+            -min-aggregate "${{ github.event.inputs.min_aggregate || '0.95' }}"

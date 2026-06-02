@@ -6,6 +6,7 @@
 //
 //	go run ./cmd/eval                 # uses .env / MNEME_* env, fake embedder
 //	go run ./cmd/eval -model x -k 5   # override model and search depth
+//	go run ./cmd/eval -min-aggregate 0.97  # fail if any version regresses
 //
 // It is intentionally outside `go test ./...` (which must stay offline): a run
 // needs network and an API key.
@@ -46,6 +47,7 @@ func run() error {
 		k           = flag.Int("k", 3, "search top-k for recall@k")
 		out         = flag.String("out", "", "optional results file to write (markdown)")
 		verbose     = flag.Bool("v", false, "print the facts extracted for each fixture")
+		minAgg      = flag.Float64("min-aggregate", 0, "fail (exit 1) if any prompt version's aggregate is below this; the eval-regression gate (0 = off)")
 	)
 	flag.Parse()
 
@@ -122,6 +124,20 @@ func run() error {
 			return err
 		}
 		fmt.Printf("\nwrote results to %s\n", *out)
+	}
+
+	// Eval-regression gate: every prompt version must hold the aggregate bar.
+	if *minAgg > 0 {
+		var regressed []string
+		for _, r := range reports {
+			if r.MeanAggregate() < *minAgg {
+				regressed = append(regressed, fmt.Sprintf("%s=%.4f", r.Version, r.MeanAggregate()))
+			}
+		}
+		if len(regressed) > 0 {
+			return fmt.Errorf("aggregate regressed below %.4f: %s", *minAgg, strings.Join(regressed, ", "))
+		}
+		fmt.Printf("\neval-regression gate: all %d version(s) at or above %.4f ✓\n", len(reports), *minAgg)
 	}
 	return nil
 }

@@ -1,5 +1,7 @@
 # mneme
 
+[![CI](https://github.com/AccursedGalaxy/mneme/actions/workflows/ci.yml/badge.svg)](https://github.com/AccursedGalaxy/mneme/actions/workflows/ci.yml)
+
 A small, self-contained **agent memory** library for Go — drop it into any agent
 to give it persistent, searchable long-term memory.
 
@@ -140,8 +142,9 @@ The extraction prompt is versioned (`extractionPromptV1`, …) and scored by the
 harness in [`eval/`](./eval), so prompt changes are decisions backed by numbers.
 
 ```sh
-go run ./cmd/eval                    # offline-safe fake embedder, real LLM
-go run ./cmd/eval -embedder openai   # real embeddings, true semantic search@k
+go run ./cmd/eval                       # offline-safe fake embedder, real LLM
+go run ./cmd/eval -embedder openai      # real embeddings, true semantic search@k
+go run ./cmd/eval -min-aggregate 0.95   # fail (exit 1) if any version regresses
 ```
 
 Current baseline for `extractionPromptV1` (gpt-4o-mini, text-embedding-3-small,
@@ -150,6 +153,20 @@ k=3) — see [`eval/RESULTS.md`](./eval/RESULTS.md):
 | recall | precision | specificity | search@k | dedup | **aggregate** |
 |---|---|---|---|---|---|
 | 0.94 | 0.97 | 1.00 | 0.94 | 1.00 | **0.97** |
+
+The invariant — *every later prompt version must not regress the aggregate* — is
+enforced by the `-min-aggregate` gate, run by the
+[`Eval regression gate`](./.github/workflows/eval.yml) workflow (manual + weekly,
+needs the `OPENROUTER_API_KEY` repo secret). The gate is a regression *floor*
+(default `0.95`) rather than the exact baseline, since the live-LLM aggregate has
+run-to-run noise of roughly ±0.01 — loose enough not to flake, tight enough to
+catch a genuinely worse prompt.
+
+## Continuous integration
+
+[`CI`](./.github/workflows/ci.yml) runs `gofmt`, `go vet`, `go build` and the
+full race-enabled test suite on every push and PR — all offline, no secrets.
+Mirror it locally with `make ci` (and `make eval` for the live prompt gate).
 
 Unit tests run fully offline with deterministic fakes — no network:
 
