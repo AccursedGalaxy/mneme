@@ -155,15 +155,43 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 	type write struct {
 		uuid string // "" => ADD (new uuid assigned at insert); else UPDATE target
 		text string
+		hash string
 	}
 	var writes []write
 	var deleteIDs []string
+
+	// ADDs are hash-deduped against what is already stored in scope and against
+	// each other — the same safety net insertNew applies. The prompt asks the
+	// model to emit NONE for an already-known fact, but a model that ADDs a
+	// duplicate anyway must not create a redundant row. UPDATEs target a specific
+	// existing record, so they are never hash-deduped: overwriting in place is the
+	// whole point, even when the new text happens to match another fact.
+	existingHashes, err := m.store.ExistingHashes(ctx, scope)
+	if err != nil {
+		return nil, fmt.Errorf("load existing hashes: %w", err)
+	}
+	seen := make(map[string]struct{})
+	addDeduped := func(text string) {
+		h := hashText(text)
+		if _, ok := existingHashes[h]; ok {
+			return
+		}
+		if _, ok := seen[h]; ok {
+			return
+		}
+		seen[h] = struct{}{}
+		writes = append(writes, write{text: text, hash: h})
+	}
 	for _, op := range ops {
 		switch op.Event {
 		case "ADD":
-			writes = append(writes, write{text: op.Text})
+			addDeduped(op.Text)
 		case "UPDATE":
-			writes = append(writes, write{uuid: idMap[op.ID], text: op.Text}) // idMap miss => "" => ADD
+			if uuid, ok := idMap[op.ID]; ok {
+				writes = append(writes, write{uuid: uuid, text: op.Text, hash: hashText(op.Text)})
+			} else {
+				addDeduped(op.Text) // idMap miss => new information, treat as ADD
+			}
 		case "DELETE":
 			if uuid, ok := idMap[op.ID]; ok {
 				deleteIDs = append(deleteIDs, uuid)
@@ -193,7 +221,7 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 		for i, w := range writes {
 			rec := types.Record{
 				Text:      w.text,
-				Hash:      hashText(w.text),
+				Hash:      w.hash,
 				Embedding: vecs[i],
 				Scope:     scope,
 				CreatedAt: now,
