@@ -249,6 +249,12 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 					// The target was concurrently deleted between retrieval and
 					// this write, so Update wrote nothing. Don't claim a write
 					// that didn't land — drop it from the returned facts.
+					//
+					// Note: the new fact text is dropped here, not re-added as an
+					// ADD. Any genuinely new info in this UPDATE is lost unless the
+					// same fact recurs in a later Add. We accept this because the
+					// race is rare and never corrupts the store; falling back to an
+					// ADD would be strictly safer but isn't worth the complexity.
 					continue
 				}
 			}

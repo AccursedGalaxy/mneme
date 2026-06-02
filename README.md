@@ -116,6 +116,10 @@ consequences you must design around:
   different embedder at it — so an accidental swap fails loudly instead of
   silently degrading search. Use a fresh store when you intentionally change
   embedders, or pass `mneme.AllowEmbedderMismatch()` to override the guard.
+  Stores written before this guard existed have no recorded identity, so the
+  first insert after upgrading pins whatever embedder is configured then —
+  point the same embedder you originally used at a legacy store, or the guard
+  will lock in the wrong one.
 
 These are deliberate tradeoffs for the default strategy (simpler, one LLM call
 per `Add`). When staleness matters, opt into consolidation:

@@ -25,7 +25,8 @@ type Embedder interface {
 // embedding model (e.g. "text-embedding-3-small"). mneme uses it to pin an
 // embedder identity to a store and catch accidental embedder swaps, which
 // silently degrade search. Embedders that do not implement Named are identified
-// by dimension alone.
+// by dimension alone, so swapping one unnamed embedder for a different unnamed
+// one of the same dimension cannot be detected.
 type Named interface {
 	Name() string
 }
