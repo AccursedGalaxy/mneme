@@ -24,6 +24,13 @@ type (
 // for dedup/linking when WithExtractionTopK is not set.
 const DefaultExtractionTopK = 10
 
+// DefaultConsolidationTopK is how many existing facts the consolidation pass
+// reconciles against under WithStrategy(Consolidate), when WithConsolidationTopK
+// is not set. It is wider than DefaultExtractionTopK: consolidation needs recall
+// on the facts a new fact might overturn, not the extractor's conversation-keyed
+// dedup/linking context — see retrieveForConsolidation in pipeline.go.
+const DefaultConsolidationTopK = 30
+
 // Strategy selects how Add reconciles newly extracted facts with what is already
 // stored in scope.
 type Strategy int
@@ -71,6 +78,7 @@ type memory struct {
 	llm                  provider.LLM
 	embedder             provider.Embedder
 	extractionTopK       int
+	consolidationTopK    int
 	promptVersion        string
 	strategy             Strategy
 	consolidationVersion string
@@ -103,6 +111,19 @@ func WithExtractionTopK(n int) Option {
 	}
 }
 
+// WithConsolidationTopK sets how many existing facts the consolidation pass
+// (WithStrategy(Consolidate)) retrieves to reconcile each Add against. Larger
+// values widen the reconciliation window — more stale facts become reachable for
+// UPDATE/DELETE — at the cost of a longer consolidation prompt. Ignored under the
+// Additive strategy.
+func WithConsolidationTopK(n int) Option {
+	return func(m *memory) {
+		if n >= 0 {
+			m.consolidationTopK = n
+		}
+	}
+}
+
 // WithPromptVersion selects the extraction prompt version (see PromptVersions).
 func WithPromptVersion(v string) Option { return func(m *memory) { m.promptVersion = v } }
 
@@ -122,6 +143,7 @@ func WithConsolidationVersion(v string) Option {
 func New(opts ...Option) (Memory, error) {
 	m := &memory{
 		extractionTopK:       DefaultExtractionTopK,
+		consolidationTopK:    DefaultConsolidationTopK,
 		promptVersion:        DefaultPromptVersion,
 		strategy:             Additive,
 		consolidationVersion: DefaultConsolidationVersion,

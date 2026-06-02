@@ -96,6 +96,44 @@ func TestConsolidateUpdatesChangedFact(t *testing.T) {
 	}
 }
 
+func TestConsolidateRetrievesByCandidateNotConversation(t *testing.T) {
+	// extractionTopK = 0: the extractor is shown NO existing-memory context. The
+	// old design reused that context for consolidation, so it could never
+	// reconcile here. Candidate-keyed retrieval finds the fact the new fact
+	// overturns on its own, so the stale fact still UPDATEs in place.
+	llm := &fake.LLM{Responder: func(system, user string) (string, error) {
+		if isConsolidationCall(system) {
+			// The consolidation window holds the stale Munich fact as id 0.
+			return `{"memory":[{"id":"0","text":"Alice lives in Berlin","event":"UPDATE"}]}`, nil
+		}
+		if strings.Contains(newMsgs(user), "Munich") {
+			return fake.JSON("Alice lives in Munich"), nil
+		}
+		return fake.JSON("Alice lives in Berlin"), nil
+	}}
+	m := consolidateMemory(t, llm)
+	m.extractionTopK = 0 // extractor gets no conversation-keyed context at all
+	ctx := context.Background()
+	scope := Scope{UserID: "alice"}
+
+	first, err := m.Add(ctx, []Message{{Role: "user", Content: "I live in Munich"}}, scope)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("seed Add: facts=%d err=%v", len(first), err)
+	}
+	seededID := first[0].ID
+
+	changed, err := m.Add(ctx, []Message{{Role: "user", Content: "I moved to Berlin"}}, scope)
+	if err != nil {
+		t.Fatalf("update Add: %v", err)
+	}
+	if len(changed) != 1 || changed[0].ID != seededID {
+		t.Fatalf("candidate-keyed retrieval should UPDATE the stale fact in place, got %+v", changed)
+	}
+	if n := storeCount(t, m, scope); n != 1 {
+		t.Errorf("move should UPDATE in place, not pile up: scope has %d facts, want 1", n)
+	}
+}
+
 func TestConsolidateAddsUnrelatedFact(t *testing.T) {
 	llm := &fake.LLM{Responder: func(system, user string) (string, error) {
 		if isConsolidationCall(system) {

@@ -121,10 +121,15 @@ m, _ := mneme.New(mneme.WithStrategy(mneme.Consolidate))
 
 Consolidate runs a second LLM call per `Add` that reconciles the new facts
 against the existing ones — UPDATE a changed value in place, DELETE a
-contradicted one, ADD genuinely new facts, leave the rest untouched. It costs the
-extra call (only when there are existing facts in scope to reconcile against) and
-a malformed/failed consolidation response safely falls back to an additive
-insert. See `PLAN-v2.md` §4.2.
+contradicted one, ADD genuinely new facts, leave the rest untouched. The facts it
+reconciles against are retrieved _per extracted candidate_, not by the
+conversation, so a new fact ("moved to Berlin") surfaces the stale one it
+overturns ("lives in Munich") even when that fact is unlike the rest of the turn.
+`WithConsolidationTopK` sets how wide that reconciliation window is (default 30) —
+larger widens recall on stale facts at the cost of a longer prompt. It costs the
+extra LLM call (only when there are facts in scope to reconcile against) plus a
+cheap per-candidate retrieval, and a malformed/failed consolidation response
+safely falls back to an additive insert. See `PLAN-v2.md` §4.2.
 
 ## Eval harness
 

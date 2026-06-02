@@ -22,6 +22,8 @@
 // WithStrategy(Consolidate) to instead run a second LLM call that reconciles new
 // facts against existing ones (ADD/UPDATE/DELETE/NONE), so a changed fact
 // ("moved from Seattle to Austin") updates the stale one in place rather than
-// piling up beside it — at the cost of one extra LLM call per Add. See PLAN.md
-// (v1 additive design) and PLAN-v2.md §4.2 (consolidation) for the full design.
+// piling up beside it — at the cost of one extra LLM call per Add (plus a cheap
+// per-candidate retrieval to find the facts each new fact might overturn; see
+// WithConsolidationTopK). See PLAN.md (v1 additive design) and PLAN-v2.md §4.2
+// (consolidation) for the full design.
 package mneme

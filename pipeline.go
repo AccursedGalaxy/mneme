@@ -3,6 +3,7 @@ package mneme
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -22,9 +23,11 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 	}
 
 	// 1+2. Retrieve existing memories in scope, ranked by relevance to the
-	// incoming conversation, to show the extractor for dedup/linking.
+	// incoming conversation, to show the extractor for dedup/linking. This is the
+	// extractor's context only; the consolidation pass retrieves its own window
+	// keyed on the extracted candidates (see retrieveForConsolidation below),
+	// because the facts a new fact overturns are not the facts most like the turn.
 	var existing []labeledMemory
-	var idMap map[string]string
 	if m.extractionTopK > 0 {
 		qvec, err := m.embedOne(ctx, convText)
 		if err != nil {
@@ -34,10 +37,9 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 		if err != nil {
 			return nil, fmt.Errorf("retrieve existing memories: %w", err)
 		}
-		// 3. Anti-hallucination relabel: real UUIDs -> "0","1",... The reverse
-		// map (integer id -> UUID) is what the consolidation pass uses to apply
-		// UPDATE/DELETE back to the right record; additive mode ignores it.
-		existing, idMap = relabelExisting(hits)
+		// 3. Anti-hallucination relabel: real UUIDs -> "0","1",... so the
+		// extractor can reference existing memories without seeing raw ids.
+		existing, _ = relabelExisting(hits)
 	}
 
 	// 4. Extract (one LLM call) with our versioned prompt.
@@ -54,11 +56,19 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 		return nil, nil
 	}
 
-	// 6. Reconcile and persist. Consolidation needs existing facts to reconcile
-	// against; with none in scope there is nothing to UPDATE/DELETE, so we save
-	// the second LLM call and fall through to the additive insert.
-	if m.strategy == Consolidate && len(existing) > 0 {
-		return m.consolidate(ctx, scope, existing, idMap, extracted)
+	// 6. Reconcile and persist. Consolidation reconciles the candidates against
+	// the facts they are most likely to overturn — retrieved per candidate, not
+	// per conversation. With nothing reconcilable in scope there is nothing to
+	// UPDATE/DELETE, so we save the second LLM call and fall through to the
+	// additive insert.
+	if m.strategy == Consolidate {
+		conExisting, conIDMap, err := m.retrieveForConsolidation(ctx, scope, extracted)
+		if err != nil {
+			return nil, err
+		}
+		if len(conExisting) > 0 {
+			return m.consolidate(ctx, scope, conExisting, conIDMap, extracted)
+		}
 	}
 	return m.insertNew(ctx, scope, extracted)
 }
@@ -255,6 +265,72 @@ func (m *memory) embedOne(ctx context.Context, text string) ([]float32, error) {
 // today formats the pipeline's clock for date grounding in the prompt.
 func (m *memory) today() string {
 	return m.clock().Format("2006-01-02 (Monday)")
+}
+
+// retrieveForConsolidation gathers the existing facts the extracted candidates
+// are most likely to overturn, and relabels them for the consolidation prompt.
+//
+// Unlike the extractor's conversation-keyed context, this retrieves per candidate
+// text — the ranking consolidation actually needs, since a candidate ("moved to
+// Berlin") must surface the fact it contradicts ("lives in Munich") even when
+// that fact is unlike the rest of the turn. Each candidate's neighbourhood
+// (top consolidationTopK by cosine) is unioned, keeping each record's best score,
+// and the union is capped at consolidationTopK so the consolidation prompt stays
+// bounded regardless of candidate count. A candidate whose contradiction target
+// scores below that cap can be missed — widen WithConsolidationTopK to trade
+// prompt size for recall. Returns the relabelled facts and the integer-id ->
+// real-UUID map the consolidation pass uses to apply UPDATE/DELETE.
+func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, candidates []extractedFact) ([]labeledMemory, map[string]string, error) {
+	if m.consolidationTopK <= 0 || len(candidates) == 0 {
+		return nil, nil, nil
+	}
+
+	texts := make([]string, len(candidates))
+	for i, c := range candidates {
+		texts[i] = c.Text
+	}
+	vecs, err := m.embedder.Embed(ctx, texts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("embed candidates for consolidation: %w", err)
+	}
+	if len(vecs) != len(candidates) {
+		return nil, nil, fmt.Errorf("embedder returned %d vectors for %d candidates", len(vecs), len(candidates))
+	}
+
+	// Union the per-candidate neighbourhoods, keeping each record's best score.
+	best := make(map[string]types.Hit)
+	for _, v := range vecs {
+		hits, err := m.store.Search(ctx, scope, v, m.consolidationTopK)
+		if err != nil {
+			return nil, nil, fmt.Errorf("retrieve for consolidation: %w", err)
+		}
+		for _, h := range hits {
+			if prev, ok := best[h.ID]; !ok || h.Score > prev.Score {
+				best[h.ID] = h
+			}
+		}
+	}
+	if len(best) == 0 {
+		return nil, nil, nil
+	}
+
+	// Rank by score (ties broken by id for a deterministic relabel) and cap.
+	merged := make([]types.Hit, 0, len(best))
+	for _, h := range best {
+		merged = append(merged, h)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].Score != merged[j].Score {
+			return merged[i].Score > merged[j].Score
+		}
+		return merged[i].ID < merged[j].ID
+	})
+	if len(merged) > m.consolidationTopK {
+		merged = merged[:m.consolidationTopK]
+	}
+
+	labeled, idMap := relabelExisting(merged)
+	return labeled, idMap, nil
 }
 
 // relabelExisting maps retrieved facts' real UUIDs to small integer-string ids

@@ -20,12 +20,13 @@ func newTestMemory(t *testing.T, llm *fake.LLM) *memory {
 	}
 	t.Cleanup(func() { st.Close() })
 	return &memory{
-		store:          st,
-		llm:            llm,
-		embedder:       &fake.Embedder{D: 128},
-		extractionTopK: DefaultExtractionTopK,
-		promptVersion:  DefaultPromptVersion,
-		clock:          func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) },
+		store:             st,
+		llm:               llm,
+		embedder:          &fake.Embedder{D: 128},
+		extractionTopK:    DefaultExtractionTopK,
+		consolidationTopK: DefaultConsolidationTopK,
+		promptVersion:     DefaultPromptVersion,
+		clock:             func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) },
 	}
 }
 
