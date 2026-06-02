@@ -37,6 +37,10 @@ type Report struct {
 	// ConsolidationVersion records which consolidation prompt version was used
 	// (empty for additive runs or the library default), for run provenance.
 	ConsolidationVersion string
+	// Rerank records whether a rerank pass was active in Search; MultiQuery
+	// records the query-expansion fan-out (0/1 = off), both for run provenance.
+	Rerank     bool
+	MultiQuery int
 }
 
 // CategoryStat aggregates one category (or the whole run) into mean metrics.

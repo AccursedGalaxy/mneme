@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AccursedGalaxy/mneme"
 	"github.com/AccursedGalaxy/mneme/bench"
 	"github.com/AccursedGalaxy/mneme/provider"
 	"github.com/AccursedGalaxy/mneme/provider/fake"
@@ -49,6 +50,8 @@ func run() error {
 		k         = flag.Int("k", 5, "search top-k facts fed to the answer model")
 		strategy  = flag.String("strategy", bench.StrategyAdditive, "write strategy: additive | consolidate")
 		cprompt   = flag.String("cprompt", "", "consolidation prompt version (e.g. v1 | v2); empty = library default. Only used with -strategy consolidate")
+		rerank    = flag.Bool("rerank", false, "enable the LLM rerank pass in Search (over-retrieve, reorder, truncate to k)")
+		multiQ    = flag.Int("multiquery", 0, "if >1, expand each question into this many search phrasings and union the hits before reranking")
 		limit     = flag.Int("limit", 0, "if >0, run only the first N samples (smoke test)")
 		maxQ      = flag.Int("maxq", 0, "if >0, cap questions per sample (smoke/cost control)")
 		out       = flag.String("out", "bench/RESULTS.md", "results file to write (markdown); empty to skip")
@@ -113,6 +116,11 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
+	var reranker mneme.Reranker
+	if *rerank {
+		reranker = &openai.LLMReranker{LLM: llm}
+	}
+
 	report, err := bench.Run(ctx, samples, bench.Config{
 		LLM:                  llm,
 		Embedder:             embedder,
@@ -120,6 +128,8 @@ func run() error {
 		K:                    *k,
 		Strategy:             *strategy,
 		ConsolidationVersion: *cprompt,
+		Reranker:             reranker,
+		MultiQuery:           *multiQ,
 		Progress: func(done, total int) {
 			fmt.Fprintf(os.Stderr, "\r  scored %d/%d samples", done, total)
 			if done == total {
@@ -144,6 +154,8 @@ func run() error {
 		maxQ:     *maxQ,
 		samples:  len(samples),
 		cprompt:  *cprompt,
+		rerank:   *rerank,
+		multiQ:   *multiQ,
 	})
 	fmt.Print(md)
 
@@ -211,6 +223,8 @@ type runMeta struct {
 	dataset, path, model, embedder string
 	limit, maxQ, samples           int
 	cprompt                        string // consolidation prompt version, if set
+	rerank                         bool   // rerank pass active in Search
+	multiQ                         int    // multi-query fan-out (0/1 = off)
 }
 
 // render builds the human + markdown report: a per-category table (the lever
@@ -224,6 +238,12 @@ func render(report bench.Report, m runMeta) string {
 		m.path, m.model, m.embedder, report.K, report.Strategy)
 	if m.cprompt != "" {
 		fmt.Fprintf(&b, "  ·  cprompt: `%s`", m.cprompt)
+	}
+	if m.rerank {
+		fmt.Fprintf(&b, "  ·  rerank: `on`")
+	}
+	if m.multiQ > 1 {
+		fmt.Fprintf(&b, "  ·  multiquery: `%d`", m.multiQ)
 	}
 	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.\n\n")
@@ -254,6 +274,12 @@ func render(report bench.Report, m runMeta) string {
 		m.dataset, m.path, report.K, report.Strategy)
 	if m.cprompt != "" {
 		fmt.Fprintf(&b, " -cprompt %s", m.cprompt)
+	}
+	if m.rerank {
+		fmt.Fprintf(&b, " -rerank")
+	}
+	if m.multiQ > 1 {
+		fmt.Fprintf(&b, " -multiquery %d", m.multiQ)
 	}
 	if m.limit > 0 {
 		fmt.Fprintf(&b, " -limit %d", m.limit)

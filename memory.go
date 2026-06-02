@@ -84,6 +84,8 @@ type memory struct {
 	consolidationVersion  string
 	clock                 func() time.Time
 	allowEmbedderMismatch bool
+	reranker              Reranker
+	multiQueryN           int
 }
 
 var _ Memory = (*memory)(nil)

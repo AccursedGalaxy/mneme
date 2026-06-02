@@ -278,21 +278,37 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 
 // Search embeds the query and returns the top-k facts in scope by cosine
 // similarity, Score populated, highest first.
+//
+// With a reranker (WithReranker) or multi-query (WithMultiQuery) configured it
+// over-retrieves a wider pool (DefaultRerankPoolN per phrasing), unions and
+// reorders it, then keeps the leading k — recovering answer facts that raw
+// cosine dilutes past the cutoff. The public signature is unchanged; with no
+// booster the result is identical to plain top-k cosine.
 func (m *memory) Search(ctx context.Context, query string, scope Scope, k int) ([]Fact, error) {
 	if strings.TrimSpace(query) == "" || k <= 0 {
 		return nil, nil
 	}
-	qvec, err := m.embedOne(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("embed query: %w", err)
+
+	queries := m.searchQueries(ctx, query)
+	poolN := k
+	if m.reranker != nil || len(queries) > 1 {
+		poolN = rerankPoolN(k)
 	}
-	hits, err := m.store.Search(ctx, scope, qvec, k)
+
+	facts, err := m.gatherCandidates(ctx, queries, scope, poolN)
 	if err != nil {
-		return nil, fmt.Errorf("search: %w", err)
+		return nil, err
 	}
-	facts := make([]Fact, len(hits))
-	for i, h := range hits {
-		facts[i] = recordToFact(h.Record, h.Score)
+
+	if m.reranker != nil && len(facts) > 1 {
+		facts, err = m.reranker.Rerank(ctx, query, facts)
+		if err != nil {
+			return nil, fmt.Errorf("rerank: %w", err)
+		}
+	}
+
+	if len(facts) > k {
+		facts = facts[:k]
 	}
 	return facts, nil
 }

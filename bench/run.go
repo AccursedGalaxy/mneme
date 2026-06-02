@@ -50,6 +50,15 @@ type Config struct {
 	// harness A/B prompt versions (e.g. v1 vs the conservative v2).
 	ConsolidationVersion string
 
+	// Reranker, when set, enables a rerank pass in Search (PLAN-v2.md §4.3): the
+	// harness over-retrieves and reorders candidates before truncating to K. Nil
+	// leaves Search at plain top-k cosine.
+	Reranker mneme.Reranker
+
+	// MultiQuery, when > 1, makes Search expand each question into that many
+	// phrasings and union the hits before reranking (PLAN-v2.md §4.3).
+	MultiQuery int
+
 	// Progress, if set, is called after each sample is fully scored. Lets the
 	// runner print live progress without the library writing to stdout.
 	Progress func(doneSamples, totalSamples int)
@@ -93,12 +102,24 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 	if cfg.ConsolidationVersion != "" {
 		opts = append(opts, mneme.WithConsolidationVersion(cfg.ConsolidationVersion))
 	}
+	if cfg.Reranker != nil {
+		opts = append(opts, mneme.WithReranker(cfg.Reranker))
+	}
+	if cfg.MultiQuery > 1 {
+		opts = append(opts, mneme.WithMultiQuery(cfg.MultiQuery))
+	}
 	mem, err := mneme.New(opts...)
 	if err != nil {
 		return Report{}, fmt.Errorf("build memory: %w", err)
 	}
 
-	report := Report{K: cfg.K, Strategy: cfg.Strategy, ConsolidationVersion: cfg.ConsolidationVersion}
+	report := Report{
+		K:                    cfg.K,
+		Strategy:             cfg.Strategy,
+		ConsolidationVersion: cfg.ConsolidationVersion,
+		Rerank:               cfg.Reranker != nil,
+		MultiQuery:           cfg.MultiQuery,
+	}
 	for i, s := range samples {
 		results, err := runSample(ctx, mem, answerLLM, judge, cfg, s)
 		if err != nil {

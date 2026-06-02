@@ -140,6 +140,36 @@ extra LLM call (only when there are facts in scope to reconcile against) plus a
 cheap per-candidate retrieval, and a malformed/failed consolidation response
 safely falls back to an additive insert. See `PLAN-v2.md` §4.2.
 
+### Retrieval boosters: rerank + multi-query
+
+Brute-force cosine over a single query phrasing leaves recall on the table: the
+fact that answers a question often exists but sits just past the top-k cutoff
+(retrieval dilution). Two opt-in `Search` boosters recover it, both leaving the
+public `Search` signature unchanged:
+
+```go
+m, _ := mneme.New(
+    mneme.WithReranker(&openai.LLMReranker{LLM: llm}), // over-retrieve, reorder, keep top-k
+    mneme.WithMultiQuery(3),                            // expand into 3 phrasings, union the hits
+)
+```
+
+- **Rerank** (`WithReranker`): `Search` retrieves a wider pool (`DefaultRerankPoolN`,
+  ~20) instead of just `k`, hands it to the `Reranker` to reorder by relevance,
+  then keeps the leading `k`. The shipped `openai.LLMReranker` scores each
+  candidate with one LLM call and is parse-defensive — a malformed response
+  leaves the cosine order untouched. The `Reranker` interface is tiny, so a
+  cross-encoder or hosted rerank API can drop in later.
+- **Multi-query** (`WithMultiQuery(n)`): one LLM call rewrites the query into up
+  to `n` diverse phrasings; their hits are unioned (deduped by id, best score
+  wins) before reranking. Targets multi-hop questions where one phrasing won't
+  surface every needed fact. Expansion is best-effort: if the call or its parse
+  fails, `Search` falls back to the original query alone.
+
+Each booster adds an LLM call per `Search` — opt in when retrieval accuracy is
+worth the cost. The `bench` harness exposes both as `-rerank` and `-multiquery n`.
+See `PLAN-v2.md` §4.3.
+
 ## Eval harness
 
 The extraction prompt is versioned (`extractionPromptV1`, …) and scored by the

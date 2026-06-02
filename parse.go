@@ -129,6 +129,49 @@ func cleanOps(ops []consolidationOp) []consolidationOp {
 	return out
 }
 
+// queryEnvelope is the documented multi-query expansion response shape:
+// {"queries":["...","..."]}.
+type queryEnvelope struct {
+	Queries []string `json:"queries"`
+}
+
+// parseQueries pulls the expansion list out of a raw multi-query response
+// defensively, mirroring parseExtraction (fences, embedded object, bare array).
+// On any unrecoverable failure it returns nil, so Search falls back to the
+// original query alone rather than erroring.
+func parseQueries(raw string) []string {
+	s := stripFences(raw)
+
+	var env queryEnvelope
+	if err := json.Unmarshal([]byte(s), &env); err == nil && env.Queries != nil {
+		return cleanQueries(env.Queries)
+	}
+	if obj := firstBalanced(s, '{', '}'); obj != "" {
+		if err := json.Unmarshal([]byte(obj), &env); err == nil && env.Queries != nil {
+			return cleanQueries(env.Queries)
+		}
+	}
+	if arr := firstBalanced(s, '[', ']'); arr != "" {
+		var qs []string
+		if err := json.Unmarshal([]byte(arr), &qs); err == nil {
+			return cleanQueries(qs)
+		}
+	}
+	return nil
+}
+
+// cleanQueries trims each query and drops empties, so a sloppy model response
+// does not produce blank search phrasings.
+func cleanQueries(qs []string) []string {
+	out := make([]string, 0, len(qs))
+	for _, q := range qs {
+		if q = strings.TrimSpace(q); q != "" {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
 // clean drops items with empty text and trims surrounding whitespace, so a
 // model that emits {"text":""} or stray spaces does not create junk facts.
 func clean(facts []extractedFact) []extractedFact {
