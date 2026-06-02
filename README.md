@@ -1,6 +1,8 @@
 # mneme
 
 [![CI](https://github.com/AccursedGalaxy/mneme/actions/workflows/ci.yml/badge.svg)](https://github.com/AccursedGalaxy/mneme/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/AccursedGalaxy/mneme?sort=semver)](https://github.com/AccursedGalaxy/mneme/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/AccursedGalaxy/mneme.svg)](https://pkg.go.dev/github.com/AccursedGalaxy/mneme)
 
 A small, self-contained **agent memory** library for Go — drop it into any agent
 to give it persistent, searchable long-term memory.
@@ -207,6 +209,14 @@ Unit tests run fully offline with deterministic fakes — no network:
 ```sh
 go test ./...
 ```
+
+## Releases
+
+Versioned with [SemVer](https://semver.org); the git tag *is* the version
+(`go get github.com/AccursedGalaxy/mneme@vX.Y.Z`). See [`CHANGELOG.md`](./CHANGELOG.md)
+for what changed and [`RELEASING.md`](./RELEASING.md) for how a release is cut —
+pushing a `v*` tag auto-publishes a GitHub release via
+[`release.yml`](./.github/workflows/release.yml).
 
 ## License
 

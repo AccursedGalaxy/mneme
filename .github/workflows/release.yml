@@ -1,0 +1,87 @@
+name: Release
+
+# Fires when a version tag is pushed (the last step of `/ship`). It re-runs the
+# full quality bar as a release gate — never publish red — then cuts a GitHub
+# release whose notes are the matching section of CHANGELOG.md. So the entire
+# publish step is: bump + changelog + tag + push; this workflow does the rest.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # required to create the GitHub release
+
+jobs:
+  release:
+    name: gate · publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the tag and changelog resolve
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # --- release gate: identical to CI, so a tag can never ship red ---
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (race)
+        run: go test -race -count=1 ./...
+
+      # --- extract this version's notes from CHANGELOG.md ---
+      - name: Extract release notes
+        id: notes
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}" # strip leading v: v0.2.0 -> 0.2.0
+          # Print the body between "## [<version>]" and the next "## [" heading.
+          # Capture lines after "## [<version>]" up to the next version heading
+          # or the trailing link-reference block ("[x]: https://...").
+          notes="$(awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+            capture && (/^## \[/ || /^\[[^][]+\]:[[:space:]]/) { exit }
+            capture { print }
+          ' CHANGELOG.md)"
+          if [ -z "$(printf "%s" "$notes" | tr -d '[:space:]')" ]; then
+            echo "::warning::No CHANGELOG.md section found for $version; falling back to a generic note."
+            notes="Release $tag. See CHANGELOG.md for details."
+          fi
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            printf '%s\n' "$notes"
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          prerelease=""
+          case "$tag" in
+            *-*) prerelease="--prerelease" ;; # v1.0.0-rc.1 etc.
+          esac
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes "${{ steps.notes.outputs.body }}" \
+            --verify-tag \
+            $prerelease
