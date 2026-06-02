@@ -48,6 +48,7 @@ func run() error {
 		embedKind = flag.String("embedder", "openai", "embedder: openai | fake")
 		k         = flag.Int("k", 5, "search top-k facts fed to the answer model")
 		strategy  = flag.String("strategy", bench.StrategyAdditive, "write strategy: additive | consolidate")
+		cprompt   = flag.String("cprompt", "", "consolidation prompt version (e.g. v1 | v2); empty = library default. Only used with -strategy consolidate")
 		limit     = flag.Int("limit", 0, "if >0, run only the first N samples (smoke test)")
 		maxQ      = flag.Int("maxq", 0, "if >0, cap questions per sample (smoke/cost control)")
 		out       = flag.String("out", "bench/RESULTS.md", "results file to write (markdown); empty to skip")
@@ -113,11 +114,12 @@ func run() error {
 	defer cancel()
 
 	report, err := bench.Run(ctx, samples, bench.Config{
-		LLM:      llm,
-		Embedder: embedder,
-		Store:    st,
-		K:        *k,
-		Strategy: *strategy,
+		LLM:                  llm,
+		Embedder:             embedder,
+		Store:                st,
+		K:                    *k,
+		Strategy:             *strategy,
+		ConsolidationVersion: *cprompt,
 		Progress: func(done, total int) {
 			fmt.Fprintf(os.Stderr, "\r  scored %d/%d samples", done, total)
 			if done == total {
@@ -141,6 +143,7 @@ func run() error {
 		limit:    *limit,
 		maxQ:     *maxQ,
 		samples:  len(samples),
+		cprompt:  *cprompt,
 	})
 	fmt.Print(md)
 
@@ -207,6 +210,7 @@ func loadDataset(dataset, path string) ([]bench.Sample, error) {
 type runMeta struct {
 	dataset, path, model, embedder string
 	limit, maxQ, samples           int
+	cprompt                        string // consolidation prompt version, if set
 }
 
 // render builds the human + markdown report: a per-category table (the lever
@@ -216,8 +220,12 @@ type runMeta struct {
 func render(report bench.Report, m runMeta) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# mneme bench results — %s\n\n", m.dataset)
-	fmt.Fprintf(&b, "dataset: `%s`  ·  model: `%s`  ·  embedder: `%s`  ·  k: %d  ·  strategy: `%s`\n\n",
+	fmt.Fprintf(&b, "dataset: `%s`  ·  model: `%s`  ·  embedder: `%s`  ·  k: %d  ·  strategy: `%s`",
 		m.path, m.model, m.embedder, report.K, report.Strategy)
+	if m.cprompt != "" {
+		fmt.Fprintf(&b, "  ·  cprompt: `%s`", m.cprompt)
+	}
+	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.\n\n")
 
 	bounded := m.limit > 0 || m.maxQ > 0
@@ -244,6 +252,9 @@ func render(report bench.Report, m runMeta) string {
 
 	fmt.Fprintf(&b, "\n## Reproduce\n\n```sh\ngo run ./cmd/bench -dataset %s -path %s -k %d -strategy %s",
 		m.dataset, m.path, report.K, report.Strategy)
+	if m.cprompt != "" {
+		fmt.Fprintf(&b, " -cprompt %s", m.cprompt)
+	}
 	if m.limit > 0 {
 		fmt.Fprintf(&b, " -limit %d", m.limit)
 	}
@@ -271,6 +282,9 @@ func printAnswers(report bench.Report) {
 			mark = "✓"
 		}
 		fmt.Fprintf(os.Stderr, "[%s] %s\n   Q: %s\n   gold: %s\n   pred: %s\n", mark, r.Category, r.Question, r.Gold, r.Predicted)
+		for _, f := range r.Retrieved {
+			fmt.Fprintf(os.Stderr, "   · %s\n", f)
+		}
 	}
 	fmt.Fprintln(os.Stderr)
 }

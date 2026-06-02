@@ -17,6 +17,11 @@ type QAResult struct {
 	Predicted string
 	Category  string
 
+	// Retrieved is the text of the top-k facts fed to the answer model for this
+	// question. Carried for the -v diagnostic dump so a wrong answer can be
+	// traced to a missing/merged/distorted fact rather than just observed.
+	Retrieved []string
+
 	EM    bool    // normalized exact match
 	F1    float64 // SQuAD-style token-overlap F1
 	Judge bool    // eval.Judge semantic match
@@ -29,6 +34,9 @@ type Report struct {
 	Results  []QAResult
 	K        int
 	Strategy string
+	// ConsolidationVersion records which consolidation prompt version was used
+	// (empty for additive runs or the library default), for run provenance.
+	ConsolidationVersion string
 }
 
 // CategoryStat aggregates one category (or the whole run) into mean metrics.

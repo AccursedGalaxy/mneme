@@ -129,14 +129,81 @@ Return ONLY a JSON object, no prose and no code fences, in exactly this shape:
 {"memory":[{"id":"<int|new>","text":"<the resulting fact>","event":"ADD|UPDATE|DELETE|NONE"}]}
 If nothing should change, return {"memory":[]}.`
 
+// consolidationPromptV2 is a more conservative consolidation prompt. v1 lifted
+// the multi-hop and temporal bench categories (it reconciles changed facts in
+// place) but regressed single-hop by -0.10 Judge / -0.15 F1: the model would
+// UPDATE or DELETE facts that were already correct, or merge two distinct facts
+// into one less-specific statement, losing the precise token a single-hop
+// answer needed (bench/RESULTS.md "next levers" #1).
+//
+// v2 keeps v1's UPDATE-on-genuine-change behavior — the driver of the multi-hop
+// and temporal gains — but biases hard toward preserving correct facts and
+// forbids merging or generalizing. It must retain the opening "maintain a
+// person's long-term memory" phrase: the offline bench and unit-test fakes route
+// the consolidation call by that substring (TestConsolidationPromptsKeepRoutingPhrase).
+const consolidationPromptV2 = `You maintain a person's long-term memory.
+
+You are given the CURRENT MEMORIES (each with a numeric id) and a set of NEW
+FACTS just extracted from a conversation. Decide how the new facts change the
+stored memory, and output one operation per change.
+
+Your default stance is to PRESERVE what is already stored. Most new facts are
+either brand-new information (ADD) or restatements of something already known
+(NONE). UPDATE and DELETE are the rare, deliberate operations — use them only
+when a new fact unmistakably changes or contradicts one specific existing
+memory. When in doubt, ADD or do nothing; never overwrite or remove a correct
+memory on a guess.
+
+EVENTS (choose exactly one per operation):
+- ADD: the new fact is genuinely new information not covered by any current
+  memory. Use id "new" and put the new fact in "text". When a new fact is merely
+  adjacent to an existing one (same topic, different detail), ADD it as its own
+  fact rather than folding it into the existing memory.
+- UPDATE: the SAME attribute of the SAME entity took a new value — a move, a new
+  job title, a changed preference, an explicitly corrected detail. Reference the
+  existing memory's id and write the full corrected fact in "text". An UPDATE
+  must keep every proper noun, quantity and date the original had except the one
+  value that genuinely changed, and must stay at least as specific as the memory
+  it replaces. Prefer UPDATE over deleting and re-adding when the same underlying
+  fact changed.
+- DELETE: an existing memory is explicitly contradicted or made obsolete by the
+  new facts and must be removed. Reference its id.
+- NONE: an existing memory is unaffected, or a new fact merely restates
+  something already known. This makes no change, and is the right choice
+  whenever you are unsure.
+
+RULES
+- Only emit operations that change something. A current memory the new facts do
+  not touch should simply be left alone (you may omit it, or mark it NONE).
+- Never invent ids. UPDATE, DELETE and NONE must reference an id that appears in
+  CURRENT MEMORIES exactly. ADD must use the literal id "new".
+- Never merge two distinct memories into one, and never make a memory vaguer or
+  drop a specific detail it already had. Two facts that merely share a topic are
+  different memories — keep them separate.
+- Do not rewrite a memory that is still accurate. If it is correct, leave it
+  (NONE) and ADD any genuinely new detail as a separate fact.
+- DELETE only on real contradiction or obsolescence — never just because two
+  facts are about a similar topic.
+- Each resulting fact must stay self-contained and specific: resolve pronouns to
+  names, keep proper nouns, quantities and dates — the same standard as
+  extraction.
+
+OUTPUT
+Return ONLY a JSON object, no prose and no code fences, in exactly this shape:
+{"memory":[{"id":"<int|new>","text":"<the resulting fact>","event":"ADD|UPDATE|DELETE|NONE"}]}
+If nothing should change, return {"memory":[]}.`
+
 // DefaultConsolidationVersion is the consolidation prompt version used unless
-// WithConsolidationVersion overrides it.
+// WithConsolidationVersion overrides it. Held at v1 until a bench re-run shows
+// v2 recovers single-hop without giving back the multi-hop/temporal gains; the
+// flip to v2 is the decision that "gates consolidation-as-default".
 const DefaultConsolidationVersion = "v1"
 
 // consolidationPrompts maps a version name to its consolidation system prompt.
 // Separate from promptVersions on purpose (see consolidationPromptV1).
 var consolidationPrompts = map[string]string{
 	"v1": consolidationPromptV1,
+	"v2": consolidationPromptV2,
 }
 
 // ConsolidationPromptVersions returns the registered consolidation prompt

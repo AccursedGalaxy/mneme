@@ -78,3 +78,40 @@ func TestExtractionPromptCoversPrinciples(t *testing.T) {
 		}
 	}
 }
+
+func TestConsolidationPromptVersioning(t *testing.T) {
+	if consolidationSystemPrompt("v1") != consolidationPromptV1 {
+		t.Error("v1 should map to consolidationPromptV1")
+	}
+	if consolidationSystemPrompt("v2") != consolidationPromptV2 {
+		t.Error("v2 should map to consolidationPromptV2")
+	}
+	if consolidationSystemPrompt("does-not-exist") != consolidationPrompts[DefaultConsolidationVersion] {
+		t.Error("unknown version should fall back to the default")
+	}
+	if len(ConsolidationPromptVersions()) < 2 {
+		t.Errorf("expected at least two consolidation prompt versions, got %d", len(ConsolidationPromptVersions()))
+	}
+}
+
+// The consolidation call is routed by this exact phrase in the offline bench and
+// unit-test fakes (consolidate_test.go, bench/bench_test.go); every registered
+// consolidation prompt must keep it or those fakes misroute the call.
+func TestConsolidationPromptsKeepRoutingPhrase(t *testing.T) {
+	const routing = "maintain a person's long-term memory"
+	for v, p := range consolidationPrompts {
+		if !strings.Contains(p, routing) {
+			t.Errorf("consolidation prompt %q is missing routing phrase %q", v, routing)
+		}
+	}
+}
+
+// v2 exists to stop the single-hop regression measured in bench/RESULTS.md: it
+// must bias toward preserving correct facts and forbid merging/generalizing.
+func TestConsolidationPromptV2IsConservative(t *testing.T) {
+	for _, want := range []string{"PRESERVE", "When in doubt", "Never merge", "still accurate"} {
+		if !strings.Contains(consolidationPromptV2, want) {
+			t.Errorf("consolidation prompt v2 missing conservative guardrail %q", want)
+		}
+	}
+}

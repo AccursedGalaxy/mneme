@@ -45,6 +45,11 @@ type Config struct {
 	AnswerVersion string // answer prompt version; defaults to DefaultAnswerVersion
 	Strategy      string // write strategy; defaults to StrategyAdditive
 
+	// ConsolidationVersion selects the consolidation prompt version, used only
+	// when Strategy is consolidate. Empty means the library default. Lets the
+	// harness A/B prompt versions (e.g. v1 vs the conservative v2).
+	ConsolidationVersion string
+
 	// Progress, if set, is called after each sample is fully scored. Lets the
 	// runner print live progress without the library writing to stdout.
 	Progress func(doneSamples, totalSamples int)
@@ -79,17 +84,21 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 		judge = eval.Judge{LLM: cfg.LLM}
 	}
 
-	mem, err := mneme.New(
+	opts := []mneme.Option{
 		mneme.WithStore(cfg.Store),
 		mneme.WithLLM(cfg.LLM),
 		mneme.WithEmbedder(cfg.Embedder),
 		mneme.WithStrategy(strategy),
-	)
+	}
+	if cfg.ConsolidationVersion != "" {
+		opts = append(opts, mneme.WithConsolidationVersion(cfg.ConsolidationVersion))
+	}
+	mem, err := mneme.New(opts...)
 	if err != nil {
 		return Report{}, fmt.Errorf("build memory: %w", err)
 	}
 
-	report := Report{K: cfg.K, Strategy: cfg.Strategy}
+	report := Report{K: cfg.K, Strategy: cfg.Strategy, ConsolidationVersion: cfg.ConsolidationVersion}
 	for i, s := range samples {
 		results, err := runSample(ctx, mem, answerLLM, judge, cfg, s)
 		if err != nil {
@@ -129,12 +138,23 @@ func runSample(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM, ju
 			Gold:      q.Answer,
 			Predicted: pred,
 			Category:  q.Category,
+			Retrieved: factTexts(facts),
 			EM:        exactMatch(pred, q.Answer),
 			F1:        f1(pred, q.Answer),
 			Judge:     judge.Same(ctx, pred, q.Answer),
 		})
 	}
 	return results, nil
+}
+
+// factTexts pulls the fact statements from search hits, for the -v diagnostic
+// dump (so a wrong answer can be traced to what the model actually saw).
+func factTexts(facts []mneme.Fact) []string {
+	out := make([]string, len(facts))
+	for i, f := range facts {
+		out[i] = f.Text
+	}
+	return out
 }
 
 // ingestMessages prepends the session date (when present) as a single dated

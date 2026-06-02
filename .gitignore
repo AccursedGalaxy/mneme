@@ -15,3 +15,6 @@ __debug_bin*
 
 # benchmark datasets (downloaded, not committed)
 /bench/data/
+
+# Per-project Taskwarrior DB (tk)
+.task/
