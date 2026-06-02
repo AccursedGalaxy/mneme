@@ -133,15 +133,20 @@ func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
 
 // Update replaces a record's text, hash and embedding by id, leaving its scope
 // and created_at untouched (created_at is the ingestion time, which an update
-// does not change). Updating a missing id is a no-op, not an error.
-func (s *Store) Update(ctx context.Context, rec types.Record) error {
-	_, err := s.db.ExecContext(ctx,
+// does not change). Updating a missing id is a no-op, not an error; the returned
+// bool reports whether a row actually matched.
+func (s *Store) Update(ctx context.Context, rec types.Record) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE facts SET text = ?, hash = ?, embedding = ? WHERE id = ?`,
 		rec.Text, rec.Hash, encodeVec(rec.Embedding), rec.ID)
 	if err != nil {
-		return fmt.Errorf("update %s: %w", rec.ID, err)
+		return false, fmt.Errorf("update %s: %w", rec.ID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("update %s: rows affected: %w", rec.ID, err)
+	}
+	return n > 0, nil
 }
 
 func (s *Store) Search(ctx context.Context, scope types.Scope, vec []float32, k int) ([]types.Hit, error) {

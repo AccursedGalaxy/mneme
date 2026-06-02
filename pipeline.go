@@ -241,8 +241,15 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 				inserts = append(inserts, rec)
 			} else {
 				rec.ID = w.uuid
-				if err := m.store.Update(ctx, rec); err != nil {
+				updated, err := m.store.Update(ctx, rec)
+				if err != nil {
 					return nil, fmt.Errorf("apply UPDATE: %w", err)
+				}
+				if !updated {
+					// The target was concurrently deleted between retrieval and
+					// this write, so Update wrote nothing. Don't claim a write
+					// that didn't land — drop it from the returned facts.
+					continue
 				}
 			}
 			facts = append(facts, recordToFact(rec, 0))

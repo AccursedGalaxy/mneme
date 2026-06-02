@@ -31,8 +31,10 @@ type Store interface {
 	// Update replaces an existing record's text, hash and embedding (matched by
 	// id), leaving its scope and creation time intact. It is used by the
 	// consolidation strategy's UPDATE op (mneme.WithStrategy(Consolidate)).
-	// Updating a missing id is not an error.
-	Update(ctx context.Context, rec types.Record) error
+	// Updating a missing id is not an error; the returned bool reports whether a
+	// row actually matched, letting callers tell a real write from a no-op (e.g.
+	// a target concurrently deleted between retrieval and update).
+	Update(ctx context.Context, rec types.Record) (bool, error)
 
 	// Search returns up to k records in the given scope ranked by cosine
 	// similarity to vec, highest first.

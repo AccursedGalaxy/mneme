@@ -82,8 +82,12 @@ func TestUpdate(t *testing.T) {
 
 	// Update text/hash/embedding; scope + created_at must survive untouched.
 	upd := types.Record{ID: "1", Text: "Alice lives in Austin", Hash: "h-new", Embedding: []float32{0, 1, 0}}
-	if err := s.Update(ctx, upd); err != nil {
+	updated, err := s.Update(ctx, upd)
+	if err != nil {
 		t.Fatalf("Update: %v", err)
+	}
+	if !updated {
+		t.Errorf("Update of an existing id should report a match")
 	}
 	got, err := s.Get(ctx, "1")
 	if err != nil {
@@ -102,9 +106,13 @@ func TestUpdate(t *testing.T) {
 		t.Errorf("created_at should be preserved by Update: got %v want %v", got.CreatedAt, orig.CreatedAt)
 	}
 
-	// Updating a missing id is a no-op, not an error.
-	if err := s.Update(ctx, types.Record{ID: "nope", Text: "x", Hash: "h", Embedding: []float32{1}}); err != nil {
+	// Updating a missing id is a no-op, not an error, and reports no match.
+	updated, err = s.Update(ctx, types.Record{ID: "nope", Text: "x", Hash: "h", Embedding: []float32{1}})
+	if err != nil {
 		t.Errorf("Update missing id should be a no-op: %v", err)
+	}
+	if updated {
+		t.Errorf("Update of a missing id must report no match")
 	}
 	if _, err := s.Get(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("missing-id update must not create a row, got %v", err)

@@ -96,6 +96,50 @@ func TestConsolidateUpdatesChangedFact(t *testing.T) {
 	}
 }
 
+func TestConsolidateUpdateOfDeletedTargetIsNotClaimed(t *testing.T) {
+	// The consolidation window is built from a retrieval snapshot, the LLM emits
+	// an UPDATE for a fact in it, but that fact is deleted (a concurrent Delete in
+	// another goroutine) before the write lands. Store.Update no-ops on the now-
+	// missing id, so the pipeline must NOT report a fact it never wrote — and the
+	// store must stay empty rather than gain a phantom row.
+	var m *memory
+	var seededID string
+	ctx := context.Background()
+	scope := Scope{UserID: "alice"}
+	llm := &fake.LLM{Responder: func(system, user string) (string, error) {
+		if isConsolidationCall(system) {
+			// Retrieval already captured id 0 -> seededID; now the target vanishes
+			// before the UPDATE write. This is the TOCTOU the fix guards against.
+			if err := m.store.Delete(ctx, seededID); err != nil {
+				t.Fatalf("inject concurrent delete: %v", err)
+			}
+			return `{"memory":[{"id":"0","text":"Alice lives in Austin","event":"UPDATE"}]}`, nil
+		}
+		if strings.Contains(newMsgs(user), "Seattle") {
+			return fake.JSON("Alice lives in Seattle"), nil
+		}
+		return fake.JSON("Alice lives in Austin"), nil
+	}}
+	m = consolidateMemory(t, llm)
+
+	first, err := m.Add(ctx, []Message{{Role: "user", Content: "I live in Seattle"}}, scope)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("seed Add: facts=%d err=%v", len(first), err)
+	}
+	seededID = first[0].ID
+
+	out, err := m.Add(ctx, []Message{{Role: "user", Content: "I moved to Austin"}}, scope)
+	if err != nil {
+		t.Fatalf("update Add: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("UPDATE that no-ops on a deleted target must not be claimed as written, got %+v", out)
+	}
+	if n := storeCount(t, m, scope); n != 0 {
+		t.Errorf("no-op UPDATE must not resurrect the row: scope has %d facts, want 0", n)
+	}
+}
+
 func TestConsolidateRetrievesByCandidateNotConversation(t *testing.T) {
 	// extractionTopK = 0: the extractor is shown NO existing-memory context. The
 	// old design reused that context for consolidation, so it could never
