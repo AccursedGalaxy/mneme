@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 
 	"github.com/AccursedGalaxy/mneme/store"
 	"github.com/AccursedGalaxy/mneme/types"
@@ -32,7 +33,20 @@ CREATE TABLE IF NOT EXISTS facts (
 );
 CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(user_id, agent_id, run_id);
 CREATE INDEX IF NOT EXISTS idx_facts_hash  ON facts(user_id, agent_id, run_id, hash);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `
+
+// meta keys recording the embedder identity (see store.EmbedderInfo). The model
+// name and dimension are stored as separate rows so either can be absent on
+// stores written by older versions without a migration.
+const (
+	metaEmbedderModel = "embedder_model"
+	metaEmbedderDim   = "embedder_dim"
+)
 
 // Store is a SQLite-backed store.Store.
 type Store struct {
@@ -175,6 +189,62 @@ func (s *Store) ExistingHashes(ctx context.Context, scope types.Scope) (map[stri
 		out[h] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+// EmbedderMeta reads the recorded embedder identity. ok is false when nothing
+// has been recorded yet (presence is keyed on the dimension row, always written
+// by SetEmbedderMeta; the model row may legitimately be empty for an unnamed
+// embedder).
+func (s *Store) EmbedderMeta(ctx context.Context) (store.EmbedderInfo, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM meta WHERE key IN (?, ?)`,
+		metaEmbedderModel, metaEmbedderDim)
+	if err != nil {
+		return store.EmbedderInfo{}, false, err
+	}
+	defer rows.Close()
+	var (
+		info   store.EmbedderInfo
+		hasDim bool
+	)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return store.EmbedderInfo{}, false, err
+		}
+		switch key {
+		case metaEmbedderModel:
+			info.Model = value
+		case metaEmbedderDim:
+			d, err := strconv.Atoi(value)
+			if err != nil {
+				return store.EmbedderInfo{}, false, fmt.Errorf("parse embedder dim %q: %w", value, err)
+			}
+			info.Dim = d
+			hasDim = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return store.EmbedderInfo{}, false, err
+	}
+	return info, hasDim, nil
+}
+
+// SetEmbedderMeta upserts the embedder identity rows.
+func (s *Store) SetEmbedderMeta(ctx context.Context, info store.EmbedderInfo) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	const upsert = `INSERT INTO meta (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+	if _, err := tx.ExecContext(ctx, upsert, metaEmbedderModel, info.Model); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, upsert, metaEmbedderDim, strconv.Itoa(info.Dim)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }

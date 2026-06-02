@@ -109,8 +109,11 @@ consequences you must design around:
   or expire at the application layer, or `Delete` superseded facts yourself.
 - **The embedding model is part of the store's identity.** All vectors in one
   store must come from the same embedding model — query and stored vectors share
-  a space. Changing the embedder against an existing store silently degrades
-  search (no error). Use a fresh store when you change embedders.
+  a space. The store records its embedder's model name and dimension on the first
+  insert, and `New` returns an `*EmbedderMismatchError` if you later point a
+  different embedder at it — so an accidental swap fails loudly instead of
+  silently degrading search. Use a fresh store when you intentionally change
+  embedders, or pass `mneme.AllowEmbedderMismatch()` to override the guard.
 
 These are deliberate tradeoffs for the default strategy (simpler, one LLM call
 per `Add`). When staleness matters, opt into consolidation:

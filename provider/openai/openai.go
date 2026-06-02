@@ -198,3 +198,7 @@ func (e *Embedder) Dim() int {
 	}
 	return e.FixedDim
 }
+
+// Name reports the embedding model, satisfying provider.Named so mneme can pin
+// this embedder's identity to a store and detect an accidental swap.
+func (e *Embedder) Name() string { return e.Model }

@@ -14,6 +14,15 @@ import (
 // ErrNotFound is returned by Get when no record has the requested id.
 var ErrNotFound = errors.New("mneme: fact not found")
 
+// EmbedderInfo identifies the embedding model whose vectors populate a store.
+// mneme records it once, on the first insert, and checks it on New so that
+// pointing a store at a different embedder is caught loudly instead of silently
+// degrading search (cosine over vectors from two different models is noise).
+type EmbedderInfo struct {
+	Model string // model identifier; "" when the embedder is unnamed
+	Dim   int    // vector dimension
+}
+
 // Store persists facts and answers scoped vector searches.
 type Store interface {
 	// Insert writes records. It is the caller's job to have deduped first.
@@ -38,6 +47,15 @@ type Store interface {
 	// ExistingHashes returns the set of fact hashes already stored in scope,
 	// used by the pipeline to dedup before insert.
 	ExistingHashes(ctx context.Context, scope types.Scope) (map[string]struct{}, error)
+
+	// EmbedderMeta returns the embedder identity recorded for this store, with
+	// ok=false when none has been recorded yet (a store with no facts). It lets
+	// New detect an accidental embedder swap before search silently degrades.
+	EmbedderMeta(ctx context.Context) (info EmbedderInfo, ok bool, err error)
+
+	// SetEmbedderMeta records the store's embedder identity. The pipeline calls
+	// it once, when the first fact is inserted; it overwrites any prior value.
+	SetEmbedderMeta(ctx context.Context, info EmbedderInfo) error
 
 	// Close releases resources (e.g. the DB handle).
 	Close() error

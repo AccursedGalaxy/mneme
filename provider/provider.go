@@ -20,3 +20,12 @@ type Embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 	Dim() int
 }
+
+// Named is an optional Embedder capability: a stable identifier for the
+// embedding model (e.g. "text-embedding-3-small"). mneme uses it to pin an
+// embedder identity to a store and catch accidental embedder swaps, which
+// silently degrade search. Embedders that do not implement Named are identified
+// by dimension alone.
+type Named interface {
+	Name() string
+}

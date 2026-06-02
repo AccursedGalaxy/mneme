@@ -241,3 +241,39 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+func TestEmbedderMetaRoundTrip(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	// A fresh store records no identity.
+	if _, ok, err := s.EmbedderMeta(ctx); err != nil || ok {
+		t.Fatalf("EmbedderMeta on fresh store: ok=%v err=%v, want ok=false", ok, err)
+	}
+
+	want := store.EmbedderInfo{Model: "text-embedding-3-small", Dim: 1536}
+	if err := s.SetEmbedderMeta(ctx, want); err != nil {
+		t.Fatalf("SetEmbedderMeta: %v", err)
+	}
+	got, ok, err := s.EmbedderMeta(ctx)
+	if err != nil || !ok {
+		t.Fatalf("EmbedderMeta after set: ok=%v err=%v", ok, err)
+	}
+	if got != want {
+		t.Errorf("EmbedderMeta = %+v, want %+v", got, want)
+	}
+
+	// SetEmbedderMeta overwrites, and an unnamed embedder (empty model) still
+	// records — presence is keyed on the dimension row, not the model.
+	next := store.EmbedderInfo{Model: "", Dim: 64}
+	if err := s.SetEmbedderMeta(ctx, next); err != nil {
+		t.Fatalf("SetEmbedderMeta overwrite: %v", err)
+	}
+	got, ok, err = s.EmbedderMeta(ctx)
+	if err != nil || !ok {
+		t.Fatalf("EmbedderMeta after overwrite: ok=%v err=%v", ok, err)
+	}
+	if got != next {
+		t.Errorf("EmbedderMeta = %+v, want %+v", got, next)
+	}
+}

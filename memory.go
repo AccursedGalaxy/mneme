@@ -74,15 +74,16 @@ type Memory interface {
 // memory is the concrete Memory implementation wiring a store, an LLM and an
 // embedder through the additive pipeline (see pipeline.go).
 type memory struct {
-	store                store.Store
-	llm                  provider.LLM
-	embedder             provider.Embedder
-	extractionTopK       int
-	consolidationTopK    int
-	promptVersion        string
-	strategy             Strategy
-	consolidationVersion string
-	clock                func() time.Time
+	store                 store.Store
+	llm                   provider.LLM
+	embedder              provider.Embedder
+	extractionTopK        int
+	consolidationTopK     int
+	promptVersion         string
+	strategy              Strategy
+	consolidationVersion  string
+	clock                 func() time.Time
+	allowEmbedderMismatch bool
 }
 
 var _ Memory = (*memory)(nil)
@@ -137,6 +138,16 @@ func WithConsolidationVersion(v string) Option {
 	return func(m *memory) { m.consolidationVersion = v }
 }
 
+// AllowEmbedderMismatch disables the guard that makes New fail (and Add error)
+// when the configured embedder's identity differs from the one recorded in the
+// store. Use it only when you knowingly point an embedder at a store written by
+// a different model — search quality will degrade until the facts are re-embedded
+// into a fresh store. Without this option, such a mismatch is reported as an
+// *EmbedderMismatchError instead of silently corrupting recall.
+func AllowEmbedderMismatch() Option {
+	return func(m *memory) { m.allowEmbedderMismatch = true }
+}
+
 // New constructs a Memory. Any of the store, LLM and embedder not supplied via
 // options are built from the MNEME_* environment (see PLAN.md §8). It returns an
 // error if a required provider can be neither supplied nor built.
@@ -173,6 +184,14 @@ func New(opts ...Option) (Memory, error) {
 			return nil, err
 		}
 		m.store = st
+	}
+
+	// Guard against an embedder swap before it silently degrades search: if the
+	// store already records an embedder identity, it must match the configured
+	// one. A fresh store records nothing yet (the pipeline pins it on first
+	// insert), so this is a no-op for a new database.
+	if err := m.checkEmbedderIdentity(context.Background()); err != nil {
+		return nil, err
 	}
 	return m, nil
 }

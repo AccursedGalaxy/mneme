@@ -98,6 +98,9 @@ func (m *memory) insertNew(ctx context.Context, scope Scope, candidates []extrac
 	if len(vecs) != len(kept) {
 		return nil, fmt.Errorf("embedder returned %d vectors for %d facts", len(vecs), len(kept))
 	}
+	if err := m.recordEmbedderIdentity(ctx, vecLen(vecs)); err != nil {
+		return nil, err
+	}
 
 	now := m.clock()
 	recs := make([]types.Record, len(kept))
@@ -214,6 +217,9 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 		}
 		if len(vecs) != len(writes) {
 			return nil, fmt.Errorf("embedder returned %d vectors for %d writes", len(vecs), len(writes))
+		}
+		if err := m.recordEmbedderIdentity(ctx, vecLen(vecs)); err != nil {
+			return nil, err
 		}
 
 		now := m.clock()
