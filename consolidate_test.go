@@ -220,6 +220,33 @@ func TestConsolidateDeletesObsoleteFact(t *testing.T) {
 	}
 }
 
+func TestConsolidateDuplicateAddIsHashDeduped(t *testing.T) {
+	// The prompt asks for NONE on already-known facts, but a sloppy model ADDs a
+	// fact whose text exactly matches one already stored. The hash-dedup safety
+	// net must drop it rather than create a redundant row.
+	llm := &fake.LLM{Responder: func(system, user string) (string, error) {
+		if isConsolidationCall(system) {
+			return `{"memory":[{"id":"new","text":"Alice lives in Seattle","event":"ADD"}]}`, nil
+		}
+		return fake.JSON("Alice lives in Seattle"), nil
+	}}
+	m := consolidateMemory(t, llm)
+	ctx := context.Background()
+	scope := Scope{UserID: "alice"}
+
+	m.Add(ctx, []Message{{Role: "user", Content: "I live in Seattle"}}, scope)
+	out, err := m.Add(ctx, []Message{{Role: "user", Content: "I'm in Seattle"}}, scope)
+	if err != nil {
+		t.Fatalf("restate Add: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("a duplicate ADD should write nothing, got %d facts", len(out))
+	}
+	if n := storeCount(t, m, scope); n != 1 {
+		t.Errorf("duplicate ADD should be deduped: scope has %d facts, want 1", n)
+	}
+}
+
 func TestConsolidateMalformedResponseFallsBackToAdditive(t *testing.T) {
 	// The consolidation call returns garbage. The pipeline must not corrupt the
 	// store — it falls back to inserting the candidate additively.
