@@ -52,6 +52,7 @@ func run() error {
 		cprompt   = flag.String("cprompt", "", "consolidation prompt version (e.g. v1 | v2); empty = library default. Only used with -strategy consolidate")
 		rerank    = flag.Bool("rerank", false, "enable the LLM rerank pass in Search (over-retrieve, reorder, truncate to k)")
 		multiQ    = flag.Int("multiquery", 0, "if >1, expand each question into this many search phrasings and union the hits before reranking")
+		concur    = flag.Int("concurrency", 8, "questions scored in parallel per sample (ingestion stays sequential); 1 = serial")
 		limit     = flag.Int("limit", 0, "if >0, run only the first N samples (smoke test)")
 		maxQ      = flag.Int("maxq", 0, "if >0, cap questions per sample (smoke/cost control)")
 		out       = flag.String("out", "bench/RESULTS.md", "results file to write (markdown); empty to skip")
@@ -86,13 +87,16 @@ func run() error {
 	llm := &openai.LLM{BaseURL: *base, APIKey: key, Model: *model}
 
 	var embedder provider.Embedder
+	embedLabel := *embedKind
 	switch *embedKind {
 	case "openai":
+		embedModel := envOr("MNEME_EMBED_MODEL", "text-embedding-3-small")
 		embedder = &openai.Embedder{
 			BaseURL: envOr("MNEME_EMBED_BASE_URL", *base),
 			APIKey:  firstNonEmpty(os.Getenv("MNEME_EMBED_API_KEY"), key),
-			Model:   envOr("MNEME_EMBED_MODEL", "text-embedding-3-small"),
+			Model:   embedModel,
 		}
+		embedLabel = embedModel // record the actual model so A/B result files self-document
 	case "fake":
 		embedder = &fake.Embedder{D: 256}
 		fmt.Fprintln(os.Stderr, "note: using deterministic fake (lexical) embedder — retrieval is lexical, not semantic")
@@ -130,6 +134,7 @@ func run() error {
 		ConsolidationVersion: *cprompt,
 		Reranker:             reranker,
 		MultiQuery:           *multiQ,
+		Concurrency:          *concur,
 		Progress: func(done, total int) {
 			fmt.Fprintf(os.Stderr, "\r  scored %d/%d samples", done, total)
 			if done == total {
@@ -149,7 +154,7 @@ func run() error {
 		dataset:  *dataset,
 		path:     *path,
 		model:    *model,
-		embedder: *embedKind,
+		embedder: embedLabel,
 		limit:    *limit,
 		maxQ:     *maxQ,
 		samples:  len(samples),

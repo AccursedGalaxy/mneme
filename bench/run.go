@@ -3,6 +3,7 @@ package bench
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/AccursedGalaxy/mneme"
 	"github.com/AccursedGalaxy/mneme/eval"
@@ -59,6 +60,13 @@ type Config struct {
 	// phrasings and union the hits before reranking (PLAN-v2.md §4.3).
 	MultiQuery int
 
+	// Concurrency bounds how many questions within a sample are scored in
+	// parallel. Ingestion stays sequential (writes must be ordered for
+	// consolidation); only the read-only Search→Answer→Judge phase fans out, and
+	// it is dominated by network LLM calls, so a worker pool cuts a full run from
+	// hours to minutes. Defaults to 1 (sequential) when <= 0.
+	Concurrency int
+
 	// Progress, if set, is called after each sample is fully scored. Lets the
 	// runner print live progress without the library writing to stdout.
 	Progress func(doneSamples, totalSamples int)
@@ -78,6 +86,9 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 	}
 	if cfg.Strategy == "" {
 		cfg.Strategy = StrategyAdditive
+	}
+	if cfg.Concurrency <= 0 {
+		cfg.Concurrency = 1
 	}
 	strategy, err := mnemeStrategy(cfg.Strategy)
 	if err != nil {
@@ -143,29 +154,73 @@ func runSample(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM, ju
 		}
 	}
 
-	results := make([]QAResult, 0, len(s.Questions))
-	for _, q := range s.Questions {
-		facts, err := mem.Search(ctx, q.Question, scope, cfg.K)
-		if err != nil {
-			return nil, fmt.Errorf("search %q: %w", q.Question, err)
+	// Ingestion is done; questions are read-only (Search→Answer→Judge) and
+	// independent, so fan them out across a bounded worker pool. Results are
+	// written to a pre-sized slice by index, so output order is deterministic
+	// regardless of completion order.
+	results := make([]QAResult, len(s.Questions))
+	sem := make(chan struct{}, cfg.Concurrency)
+	var wg sync.WaitGroup
+	var (
+		mu       sync.Mutex
+		firstErr error
+	)
+	for i, q := range s.Questions {
+		mu.Lock()
+		stop := firstErr != nil
+		mu.Unlock()
+		if stop {
+			break
 		}
-		pred, err := Answer(ctx, answerLLM, cfg.AnswerVersion, q.Question, facts)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, QAResult{
-			SampleID:  s.ID,
-			Question:  q.Question,
-			Gold:      q.Answer,
-			Predicted: pred,
-			Category:  q.Category,
-			Retrieved: factTexts(facts),
-			EM:        exactMatch(pred, q.Answer),
-			F1:        f1(pred, q.Answer),
-			Judge:     judge.Same(ctx, pred, q.Answer),
-		})
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, q QAPair) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			res, err := scoreQuestion(ctx, mem, answerLLM, judge, cfg, s.ID, scope, q)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			results[i] = res
+		}(i, q)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return results, nil
+}
+
+// scoreQuestion runs the read-only scoring path for one question: retrieve
+// top-k facts, answer, and score with EM/F1 and the semantic judge. Safe to
+// call concurrently — it only reads from mem and the stateless answer/judge
+// LLMs, never writes to the store.
+func scoreQuestion(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM, judge eval.Judge, cfg Config, sampleID string, scope mneme.Scope, q QAPair) (QAResult, error) {
+	facts, err := mem.Search(ctx, q.Question, scope, cfg.K)
+	if err != nil {
+		return QAResult{}, fmt.Errorf("search %q: %w", q.Question, err)
+	}
+	pred, err := Answer(ctx, answerLLM, cfg.AnswerVersion, q.Question, facts)
+	if err != nil {
+		return QAResult{}, err
+	}
+	return QAResult{
+		SampleID:  sampleID,
+		Question:  q.Question,
+		Gold:      q.Answer,
+		Predicted: pred,
+		Category:  q.Category,
+		Retrieved: factTexts(facts),
+		EM:        exactMatch(pred, q.Answer),
+		F1:        f1(pred, q.Answer),
+		Judge:     judge.Same(ctx, pred, q.Answer),
+	}, nil
 }
 
 // factTexts pulls the fact statements from search hits, for the -v diagnostic

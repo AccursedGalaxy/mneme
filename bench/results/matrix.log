@@ -1,0 +1,146 @@
+=== [14:45:46] START additive_3small (embed=text-embedding-3-small) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `additive`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.01 | 0.01 | 0.02 |
+| multi_hop | 282 | 0.06 | 0.28 | 0.26 |
+| open_domain | 96 | 0.03 | 0.06 | 0.07 |
+| single_hop | 841 | 0.21 | 0.32 | 0.36 |
+| temporal | 321 | 0.06 | 0.21 | 0.22 |
+| **overall** | **1986** | **0.11** | **0.22** | **0.23** |
+
+## Reproduce
+
+```sh
+go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive
+```
+
+wrote results to bench/results/additive_3small.md
+=== [15:24:21] DONE  additive_3small ===
+=== [15:24:21] START consolidate_3small (embed=text-embedding-3-small) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=consolidate
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `consolidate`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.00 | 0.00 | 0.01 |
+| multi_hop | 282 | 0.04 | 0.25 | 0.20 |
+| open_domain | 96 | 0.03 | 0.06 | 0.08 |
+| single_hop | 841 | 0.15 | 0.25 | 0.28 |
+| temporal | 321 | 0.05 | 0.14 | 0.19 |
+| **overall** | **1986** | **0.08** | **0.17** | **0.18** |
+
+## Reproduce
+
+```sh
+go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy consolidate
+```
+
+wrote results to bench/results/consolidate_3small.md
+=== [16:19:06] DONE  consolidate_3small ===
+=== [16:19:06] START additive_3large (embed=text-embedding-3-large) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-large`  ·  k: 5  ·  strategy: `additive`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.01 | 0.01 | 0.02 |
+| multi_hop | 282 | 0.05 | 0.28 | 0.27 |
+| open_domain | 96 | 0.04 | 0.07 | 0.08 |
+| single_hop | 841 | 0.17 | 0.28 | 0.32 |
+| temporal | 321 | 0.06 | 0.20 | 0.25 |
+| **overall** | **1986** | **0.09** | **0.20** | **0.22** |
+
+## Reproduce
+
+```sh
+go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive
+```
+
+wrote results to bench/results/additive_3large.md
+=== [16:53:57] DONE  additive_3large ===
+=== [16:53:57] START additive_geminiembed (embed=google/gemini-embedding-2-preview) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samplesbench: sample "conv-42": ingest session 23: embed extracted facts: openai embeddings: HTTP 429: {
+  "error": {
+    "code": 429,
+    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/embed_content_free_tier_requests, limit: 1000, model: gemini-embedding-2\nPlease retry in 47.257179022s.",
+    "status": "RESOURCE_EXHAUSTED",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.Help",
+        "links": [
+          {
+            "description": "Learn more about Gemini API quotas",
+            "url": "https://ai.google.dev/gemini-api/docs/rate-limits"
+          }
+        ]
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [
+          {
+            "quotaMetric": "generativelanguage.googleapis.com/embed_content_free_tier_requests",
+            "quotaId": "EmbedContentRequestsPerDayPerProjectPerModel-FreeTier",
+            "quotaDimensions": {
+              "location": "global",
+              "model": "gemini-embedding-2"
+            },
+            "quotaValue": "1000"
+          }
+        ]
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+        "retryDelay": "47s"
+      }
+    ]
+  }
+}
+
+exit status 1
+=== [17:05:12] FAILED additive_geminiembed (continuing) ===
+=== [17:05:12] START additive_boosters (embed=text-embedding-3-small) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `additive`  ·  rerank: `on`  ·  multiquery: `3`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.00 | 0.01 | 0.01 |
+| multi_hop | 282 | 0.06 | 0.28 | 0.26 |
+| open_domain | 96 | 0.06 | 0.09 | 0.10 |
+| single_hop | 841 | 0.20 | 0.32 | 0.36 |
+| temporal | 321 | 0.06 | 0.19 | 0.21 |
+| **overall** | **1986** | **0.10** | **0.21** | **0.23** |
+
+## Reproduce
+
+```sh
+go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive -rerank -multiquery 3
+```
+
+wrote results to bench/results/additive_boosters.md
+=== [18:02:19] DONE  additive_boosters ===
+=== [18:02:19] MATRIX COMPLETE ===
