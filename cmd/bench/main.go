@@ -45,7 +45,9 @@ func run() error {
 		dataset   = flag.String("dataset", "locomo", "dataset: locomo | longmemeval")
 		path      = flag.String("path", "", "path to the dataset file (required; gitignored)")
 		base      = flag.String("base", envOr("MNEME_LLM_BASE_URL", "https://openrouter.ai/api/v1"), "OpenAI-compatible base URL")
-		model     = flag.String("model", envOr("MNEME_LLM_MODEL", "openai/gpt-4o-mini"), "extraction/answer/judge model")
+		model     = flag.String("model", envOr("MNEME_LLM_MODEL", "openai/gpt-4o-mini"), "extraction model under test (also answers/judges unless those are pinned below)")
+		answerMdl = flag.String("answer-model", "", "model that answers questions from retrieved facts; defaults to -model")
+		judgeMdl  = flag.String("judge-model", "", "model for the semantic judge; defaults to -model. Pin both of these when A/B-ing extraction so answer+oracle stay constant")
 		embedKind = flag.String("embedder", "openai", "embedder: openai | fake")
 		k         = flag.Int("k", 5, "search top-k facts fed to the answer model")
 		strategy  = flag.String("strategy", bench.StrategyAdditive, "write strategy: additive | consolidate")
@@ -85,6 +87,16 @@ func run() error {
 		return fmt.Errorf("no API key found (set MNEME_LLM_API_KEY or OPENROUTER_API_KEY)")
 	}
 	llm := &openai.LLM{BaseURL: *base, APIKey: key, Model: *model}
+
+	// Pin answer + judge to fixed models when A/B-ing extraction, so the only
+	// thing that varies between runs is the model that writes facts to the store.
+	var answerLLM, judgeLLM provider.LLM
+	if *answerMdl != "" && *answerMdl != *model {
+		answerLLM = &openai.LLM{BaseURL: *base, APIKey: key, Model: *answerMdl}
+	}
+	if *judgeMdl != "" && *judgeMdl != *model {
+		judgeLLM = &openai.LLM{BaseURL: *base, APIKey: key, Model: *judgeMdl}
+	}
 
 	var embedder provider.Embedder
 	embedLabel := *embedKind
@@ -127,6 +139,8 @@ func run() error {
 
 	report, err := bench.Run(ctx, samples, bench.Config{
 		LLM:                  llm,
+		AnswerLLM:            answerLLM,
+		Judge:                judgeLLM,
 		Embedder:             embedder,
 		Store:                st,
 		K:                    *k,

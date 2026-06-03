@@ -1,0 +1,149 @@
+=== [22:13:40] EVAL phase (extraction recall/precision) ===
+--- [22:13:40] eval google/gemini-2.5-flash-lite ---
+running 18 fixtures, model=google/gemini-2.5-flash-lite, base=https://openrouter.ai/api/v1, k=5
+
+# mneme eval results
+
+model: `google/gemini-2.5-flash-lite`  ·  embedder: `openai`  ·  search k: 5
+
+| version | recall | precision | specificity | search@k | dedup | aggregate |
+|---|---|---|---|---|---|---|
+| v1 | 0.94 | 1.00 | 0.93 | 0.94 | 0.81 | **0.93** |
+
+## Per-fixture (version v1)
+
+| fixture | recall | precision | spec | search | new-on-redup | aggregate |
+|---|---|---|---|---|---|---|
+| decision | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| health-fact | 0.00 | 1.00 | 0.00 | 0.00 | 2 | 0.20 |
+| meaning-preservation-direction | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| meaning-preservation-negation | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| multi-speaker | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| multi-topic-three | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| no-fabrication | 1.00 | 1.00 | — | 1.00 | 0 | 1.00 |
+| nothing-to-extract | 1.00 | 1.00 | — | — | 0 | 1.00 |
+| plans-and-dates | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| preferences | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| promotion-and-pet | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| pronoun-resolution | 1.00 | 1.00 | 1.00 | 1.00 | 1 | 0.80 |
+| question-not-fact | 1.00 | 1.00 | — | — | 0 | 1.00 |
+| relationships | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| relative-date-grounding | 1.00 | 1.00 | 1.00 | 1.00 | 1 | 0.80 |
+| single-fact | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| specificity-numbers | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| specificity-product | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+
+wrote results to eval/results/extract_google_gemini-2.5-flash-lite.md
+    eval google/gemini-2.5-flash-lite OK
+--- [22:16:40] eval google/gemini-2.5-flash ---
+running 18 fixtures, model=google/gemini-2.5-flash, base=https://openrouter.ai/api/v1, k=5
+
+# mneme eval results
+
+model: `google/gemini-2.5-flash`  ·  embedder: `openai`  ·  search k: 5
+
+| version | recall | precision | specificity | search@k | dedup | aggregate |
+|---|---|---|---|---|---|---|
+| v1 | 1.00 | 0.94 | 1.00 | 1.00 | 1.00 | **0.99** |
+
+## Per-fixture (version v1)
+
+| fixture | recall | precision | spec | search | new-on-redup | aggregate |
+|---|---|---|---|---|---|---|
+| decision | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| health-fact | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| meaning-preservation-direction | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| meaning-preservation-negation | 1.00 | 0.67 | 1.00 | 1.00 | 0 | 0.93 |
+| multi-speaker | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| multi-topic-three | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| no-fabrication | 1.00 | 1.00 | — | 1.00 | 0 | 1.00 |
+| nothing-to-extract | 1.00 | 1.00 | — | — | 0 | 1.00 |
+| plans-and-dates | 1.00 | 0.67 | 1.00 | 1.00 | 0 | 0.93 |
+| preferences | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| promotion-and-pet | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| pronoun-resolution | 1.00 | 0.67 | 1.00 | 1.00 | 0 | 0.93 |
+| question-not-fact | 1.00 | 1.00 | — | — | 0 | 1.00 |
+| relationships | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| relative-date-grounding | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| single-fact | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| specificity-numbers | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| specificity-product | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+
+wrote results to eval/results/extract_google_gemini-2.5-flash.md
+    eval google/gemini-2.5-flash OK
+--- [22:19:15] eval openai/gpt-5-mini ---
+running 18 fixtures, model=openai/gpt-5-mini, base=https://openrouter.ai/api/v1, k=5
+
+# mneme eval results
+
+model: `openai/gpt-5-mini`  ·  embedder: `openai`  ·  search k: 5
+
+| version | recall | precision | specificity | search@k | dedup | aggregate |
+|---|---|---|---|---|---|---|
+| v1 | 0.94 | 0.83 | 1.00 | 1.00 | 1.00 | **0.94** |
+
+## Per-fixture (version v1)
+
+| fixture | recall | precision | spec | search | new-on-redup | aggregate |
+|---|---|---|---|---|---|---|
+| decision | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| health-fact | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| meaning-preservation-direction | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| meaning-preservation-negation | 1.00 | 0.33 | 1.00 | 1.00 | 0 | 0.87 |
+| multi-speaker | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| multi-topic-three | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| no-fabrication | 1.00 | 1.00 | — | 1.00 | 0 | 1.00 |
+| nothing-to-extract | 1.00 | 1.00 | — | — | 0 | 1.00 |
+| plans-and-dates | 0.00 | 0.00 | 1.00 | 1.00 | 0 | 0.60 |
+| preferences | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| promotion-and-pet | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| pronoun-resolution | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| question-not-fact | 1.00 | 0.00 | — | — | 0 | 0.50 |
+| relationships | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| relative-date-grounding | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| single-fact | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| specificity-numbers | 1.00 | 0.67 | 1.00 | 1.00 | 0 | 0.93 |
+| specificity-product | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+
+wrote results to eval/results/extract_openai_gpt-5-mini.md
+    eval openai/gpt-5-mini OK
+--- [22:25:21] eval deepseek/deepseek-v3.2 ---
+running 18 fixtures, model=deepseek/deepseek-v3.2, base=https://openrouter.ai/api/v1, k=5
+
+# mneme eval results
+
+model: `deepseek/deepseek-v3.2`  ·  embedder: `openai`  ·  search k: 5
+
+| version | recall | precision | specificity | search@k | dedup | aggregate |
+|---|---|---|---|---|---|---|
+| v1 | 1.00 | 0.89 | 1.00 | 1.00 | 0.88 | **0.92** |
+
+## Per-fixture (version v1)
+
+| fixture | recall | precision | spec | search | new-on-redup | aggregate |
+|---|---|---|---|---|---|---|
+| decision | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| health-fact | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| meaning-preservation-direction | 1.00 | 1.00 | 1.00 | 1.00 | 1 | 0.80 |
+| meaning-preservation-negation | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| multi-speaker | 1.00 | 1.00 | 1.00 | 1.00 | 1 | 0.80 |
+| multi-topic-three | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| no-fabrication | 1.00 | 1.00 | — | 1.00 | 0 | 1.00 |
+| nothing-to-extract | 1.00 | 0.00 | — | — | 0 | 0.50 |
+| plans-and-dates | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| preferences | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| promotion-and-pet | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| pronoun-resolution | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| question-not-fact | 1.00 | 0.00 | — | — | 0 | 0.50 |
+| relationships | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| relative-date-grounding | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| single-fact | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| specificity-numbers | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+| specificity-product | 1.00 | 1.00 | 1.00 | 1.00 | 0 | 1.00 |
+
+wrote results to eval/results/extract_deepseek_deepseek-v3.2.md
+    eval deepseek/deepseek-v3.2 OK
+=== [22:28:44] BENCH phase (end-to-end LoCoMo) ===
+--- [22:28:44] bench extract=google/gemini-2.5-flash (answer+judge=google/gemini-2.5-flash-lite) ---
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples

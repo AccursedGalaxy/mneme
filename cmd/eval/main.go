@@ -42,7 +42,8 @@ func run() error {
 	var (
 		fixturesDir = flag.String("fixtures", "eval/fixtures", "directory of *.json fixtures")
 		base        = flag.String("base", envOr("MNEME_LLM_BASE_URL", "https://openrouter.ai/api/v1"), "OpenAI-compatible base URL")
-		model       = flag.String("model", envOr("MNEME_LLM_MODEL", "openai/gpt-4o-mini"), "extraction/judge model")
+		model       = flag.String("model", envOr("MNEME_LLM_MODEL", "openai/gpt-4o-mini"), "extraction model under test")
+		judgeModel  = flag.String("judge-model", "", "model for the semantic judge; defaults to -model. Pin it (to a fixed model) when A/B-ing extraction models so the oracle is constant across runs")
 		embedKind   = flag.String("embedder", "fake", "embedder: fake | openai")
 		k           = flag.Int("k", 3, "search top-k for recall@k")
 		out         = flag.String("out", "", "optional results file to write (markdown)")
@@ -57,6 +58,13 @@ func run() error {
 	}
 
 	llm := &openai.LLM{BaseURL: *base, APIKey: key, Model: *model}
+
+	// Pin the judge to a fixed model when A/B-ing extraction models, so the
+	// oracle scoring recall/precision is constant and the comparison is clean.
+	var judgeLLM provider.LLM
+	if *judgeModel != "" && *judgeModel != *model {
+		judgeLLM = &openai.LLM{BaseURL: *base, APIKey: key, Model: *judgeModel}
+	}
 
 	var embedder provider.Embedder
 	switch *embedKind {
@@ -94,6 +102,7 @@ func run() error {
 
 	reports, err := eval.Run(ctx, fixtures, eval.Config{
 		LLM:      llm,
+		Judge:    judgeLLM,
 		Embedder: embedder,
 		Store:    st,
 		K:        *k,
