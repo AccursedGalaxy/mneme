@@ -38,9 +38,25 @@ gate for cutting it — see `bench/RESULTS.md` and `PLAN-v2.md` §10.
   EM, token-F1 and LLM-judge metrics, a per-category table, and flags for
   strategy, consolidation prompt, `-rerank` and `-multiquery`.
 - **CI and eval-regression-gate** GitHub Actions workflows.
+- **Parallel benchmark scoring** (`cmd/bench -concurrency`, default 8): questions
+  within a sample are scored through a bounded worker pool (ingestion stays
+  sequential), cutting a full LoCoMo run from ~90 min to ~25.
+- **Separate answer/judge models** for clean model A/Bs: `cmd/bench`
+  `-answer-model` / `-judge-model` and `cmd/eval` `-judge-model` pin those roles
+  to a fixed model so only the extraction model under test varies.
+- **Transient-failure retries** in the OpenAI-compatible client: network errors,
+  429/5xx, and empty/garbled 2xx bodies are retried with exponential backoff (up
+  to 5 attempts), so one gateway blip no longer aborts a long ingestion or bench.
 
 ### Changed
 - File-backed SQLite stores open in WAL mode for better concurrent-read behavior.
+- **Recommended extraction model is now `google/gemini-2.5-flash`** (was
+  `gpt-4o-mini`). The full-LoCoMo extraction A/B showed extraction quality is the
+  dominant lever: `flash` lifts end-to-end Judge **0.23 → 0.30** (temporal
+  0.22 → 0.45) over `flash-lite`, while a stronger embedder, consolidation, and
+  reranking all measured flat. `cmd/bench`/`cmd/eval` `-model` defaults, the
+  README config table, and `examples/basic` updated to match. See
+  `bench/RESULTS.md`.
 
 ### Fixed
 - Consolidation detects no-op `UPDATE`s against a target that was concurrently

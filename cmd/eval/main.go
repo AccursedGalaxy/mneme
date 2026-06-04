@@ -42,7 +42,7 @@ func run() error {
 	var (
 		fixturesDir = flag.String("fixtures", "eval/fixtures", "directory of *.json fixtures")
 		base        = flag.String("base", envOr("MNEME_LLM_BASE_URL", "https://openrouter.ai/api/v1"), "OpenAI-compatible base URL")
-		model       = flag.String("model", envOr("MNEME_LLM_MODEL", "openai/gpt-4o-mini"), "extraction model under test")
+		model       = flag.String("model", envOr("MNEME_LLM_MODEL", "google/gemini-2.5-flash"), "extraction model under test")
 		judgeModel  = flag.String("judge-model", "", "model for the semantic judge; defaults to -model. Pin it (to a fixed model) when A/B-ing extraction models so the oracle is constant across runs")
 		embedKind   = flag.String("embedder", "fake", "embedder: fake | openai")
 		k           = flag.Int("k", 3, "search top-k for recall@k")

@@ -45,7 +45,7 @@ func run() error {
 		dataset   = flag.String("dataset", "locomo", "dataset: locomo | longmemeval")
 		path      = flag.String("path", "", "path to the dataset file (required; gitignored)")
 		base      = flag.String("base", envOr("MNEME_LLM_BASE_URL", "https://openrouter.ai/api/v1"), "OpenAI-compatible base URL")
-		model     = flag.String("model", envOr("MNEME_LLM_MODEL", "openai/gpt-4o-mini"), "extraction model under test (also answers/judges unless those are pinned below)")
+		model     = flag.String("model", envOr("MNEME_LLM_MODEL", "google/gemini-2.5-flash"), "extraction model under test (also answers/judges unless those are pinned below)")
 		answerMdl = flag.String("answer-model", "", "model that answers questions from retrieved facts; defaults to -model")
 		judgeMdl  = flag.String("judge-model", "", "model for the semantic judge; defaults to -model. Pin both of these when A/B-ing extraction so answer+oracle stay constant")
 		embedKind = flag.String("embedder", "openai", "embedder: openai | fake")

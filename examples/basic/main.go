@@ -5,7 +5,7 @@
 //
 //	export MNEME_LLM_BASE_URL=https://openrouter.ai/api/v1
 //	export MNEME_LLM_API_KEY=$OPENROUTER_API_KEY
-//	export MNEME_LLM_MODEL=openai/gpt-4o-mini
+//	export MNEME_LLM_MODEL=google/gemini-2.5-flash
 //	export MNEME_EMBED_MODEL=text-embedding-3-small
 //	export MNEME_DB_PATH=/tmp/mneme-demo.db
 //	go run ./examples/basic

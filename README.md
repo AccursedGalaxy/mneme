@@ -72,13 +72,24 @@ vLLM, LM Studio, etc.
 
 | Env var | Meaning | Example |
 |---|---|---|
-| `MNEME_LLM_BASE_URL` | OpenAI-compatible base URL | `https://api.openai.com/v1` |
+| `MNEME_LLM_BASE_URL` | OpenAI-compatible base URL | `https://openrouter.ai/api/v1` |
 | `MNEME_LLM_API_KEY` | API key (may be empty for local) | `sk-…` |
-| `MNEME_LLM_MODEL` | extraction model | `gpt-4o-mini` |
+| `MNEME_LLM_MODEL` | extraction model | `google/gemini-2.5-flash` |
 | `MNEME_EMBED_BASE_URL` | embeddings base URL (defaults to LLM base) | — |
 | `MNEME_EMBED_API_KEY` | embeddings key (defaults to LLM key) | — |
 | `MNEME_EMBED_MODEL` | embedding model | `text-embedding-3-small` |
 | `MNEME_DB_PATH` | SQLite file path | `./mneme.db` |
+
+**Recommended extraction model: `google/gemini-2.5-flash`.** Memory quality is
+dominated by how well the extraction model captures facts, not by the embedder or
+retrieval tricks. On the full LoCoMo benchmark, switching extraction from
+`gemini-2.5-flash-lite` to `gemini-2.5-flash` lifts end-to-end answer accuracy
+**0.23 → 0.30** (temporal questions 0.22 → 0.45) — a bigger gain than a stronger
+embedder, consolidation, or reranking combined, all of which measured flat. A
+mid-tier model (`gpt-4o-mini`, `gemini-2.5-flash-lite`) works but extracts fewer
+and vaguer facts; reasoning models (`gpt-5-mini`) over-extract and cost more for
+no gain. `text-embedding-3-small` is fine — a larger embedder did not help. See
+[`bench/RESULTS.md`](bench/RESULTS.md) for the full matrix.
 
 ## Public API
 
