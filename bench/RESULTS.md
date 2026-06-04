@@ -26,6 +26,34 @@ EM/F1 for the baseline: overall 0.11 / 0.22. Full per-run tables in `bench/resul
 
 3. **Retrieval boosters (LLM-rerank + multi-query=3) are flat: 0.23 → 0.23** for ~2× the per-question cost. Small open-domain bump (+0.03), nothing on aggregate. The LLM-as-reranker does not earn its cost; don't default it. A real cross-encoder reranker *might*, but #2 makes retrieval-side gains a low bet overall.
 
+## Extraction-model A/B — the lever that works
+
+The matrix above pointed at extraction as the bottleneck. So we varied **only the extraction model**, pinning answer + judge to `gemini-2.5-flash-lite` (so the delta is purely "which model writes facts to the store"); embedder `text-embedding-3-small`, additive, k=5.
+
+**eval** (18 fixtures, oracle pinned to `gemini-2.5-flash`):
+
+| extraction model | recall | precision | specificity | search@k | dedup | aggregate | $/extract |
+|---|---|---|---|---|---|---|---|
+| gemini-2.5-flash-lite (baseline) | 0.94 | 1.00 | 0.93 | 0.94 | 0.81 | 0.93 | $0.00034 |
+| **gemini-2.5-flash** | 1.00 | 0.94 | 1.00 | 1.00 | 1.00 | **0.99** | $0.0017 |
+| gpt-5-mini | 0.94 | 0.83 | 1.00 | 1.00 | 1.00 | 0.94 | $0.0029 |
+| deepseek-v3.2 | 1.00 | 0.89 | 1.00 | 1.00 | 0.88 | 0.92 | $0.0021 |
+
+**bench** (full LoCoMo Judge, answer+judge = flash-lite):
+
+| extraction model | single | multi | temporal | open | adversarial | **overall** |
+|---|---|---|---|---|---|---|
+| gemini-2.5-flash-lite (baseline) | 0.36 | 0.26 | 0.22 | 0.07 | 0.02 | **0.23** |
+| **gemini-2.5-flash** | 0.42 | 0.26 | **0.45** | 0.10 | 0.02 | **0.30** |
+| gpt-5-mini | — | — | — | — | — | FAILED (2h ingest timeout; reasoning extraction too slow) |
+| deepseek-v3.2 | — | — | — | — | — | FAILED (provider error mid-run; eval already < baseline) |
+
+**Result: `gemini-2.5-flash` extraction lifts overall Judge 0.23 → 0.30 (+30% relative), all from extraction alone.** Temporal nearly doubles (0.22 → 0.45) — flash-lite was mangling dated facts that flash preserves (consistent with its eval specificity 0.93→1.00, dedup 0.81→1.00). This is the **first lever that moves the number** — bigger than embeddings, consolidation, or reranking combined (all of which were flat).
+
+Losers, usefully: **gpt-5-mini** is slower (reasoning tokens, hit the harness 2h ingest timeout), pricier, *and* worse on eval (precision 0.83 — over-extracts). **deepseek-v3.2** is below baseline on eval and failed mid-bench. Neither is worth pursuing.
+
+**Recommendation: use `gemini-2.5-flash` (or equivalent-tier) for extraction, not flash-lite.** ~5× the per-fact cost ($0.0017 vs $0.00034) for +0.07 Judge — easily worth it. `adversarial` stays at 0.02 even with flash → inferential-fact capture is a *separate, harder* problem (prompt/inference work, tk #11), not a model-tier problem.
+
 ## Where the signal actually points
 
 Three independent retrieval-side levers — consolidation, a bigger embedder, and reranking — are all flat-or-negative. That triangulates the bottleneck **upstream of retrieval: facts that answer the question are never extracted in the first place**, so no amount of better ranking surfaces them.

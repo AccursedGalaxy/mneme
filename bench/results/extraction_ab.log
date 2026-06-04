@@ -146,4 +146,36 @@ wrote results to eval/results/extract_deepseek_deepseek-v3.2.md
 === [22:28:44] BENCH phase (end-to-end LoCoMo) ===
 --- [22:28:44] bench extract=google/gemini-2.5-flash (answer+judge=google/gemini-2.5-flash-lite) ---
 running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash, embedder=openai, k=5, strategy=additive
-  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `additive`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.01 | 0.02 | 0.02 |
+| multi_hop | 282 | 0.07 | 0.29 | 0.26 |
+| open_domain | 96 | 0.05 | 0.08 | 0.10 |
+| single_hop | 841 | 0.24 | 0.39 | 0.42 |
+| temporal | 321 | 0.08 | 0.29 | 0.45 |
+| **overall** | **1986** | **0.13** | **0.26** | **0.30** |
+
+## Reproduce
+
+```sh
+go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive
+```
+
+wrote results to bench/results/extract_google_gemini-2.5-flash.md
+    bench google/gemini-2.5-flash OK
+--- [23:06:46] bench extract=openai/gpt-5-mini (answer+judge=google/gemini-2.5-flash-lite) ---
+running locomo: 10 samples, 1986 questions, model=openai/gpt-5-mini, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samplesbench: sample "conv-48": ingest session 19: extraction LLM call: context deadline exceeded
+exit status 1
+    bench openai/gpt-5-mini FAILED (continuing)
+--- [01:06:46] bench extract=deepseek/deepseek-v3.2 (answer+judge=google/gemini-2.5-flash-lite) ---
+running locomo: 10 samples, 1986 questions, model=deepseek/deepseek-v3.2, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples    bench deepseek/deepseek-v3.2 FAILED (continuing)
+=== [02:25:02] EXTRACTION_AB COMPLETE ===
