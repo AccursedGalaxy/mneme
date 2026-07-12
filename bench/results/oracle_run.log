@@ -1,3 +1,5 @@
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
 # mneme bench results — locomo
 
 dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  answer: `google/gemini-2.5-flash-lite`  ·  judge: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `additive`
@@ -6,12 +8,12 @@ Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** =
 
 | category | n | EM | F1 | judge |
 |---|---|---|---|---|
-| adversarial | 446 | 0.96 | 0.96 | 0.96 |
-| multi_hop | 282 | 0.08 | 0.31 | 0.29 |
-| open_domain | 96 | 0.06 | 0.09 | 0.09 |
-| single_hop | 841 | 0.22 | 0.38 | 0.43 |
-| temporal | 321 | 0.06 | 0.19 | 0.24 |
-| **overall** | **1986** | **0.33** | **0.46** | **0.48** |
+| adversarial | 446 | 0.93 | 0.93 | 0.93 |
+| multi_hop | 282 | 0.18 | 0.50 | 0.56 |
+| open_domain | 96 | 0.09 | 0.13 | 0.16 |
+| single_hop | 841 | 0.41 | 0.62 | 0.67 |
+| temporal | 321 | 0.11 | 0.32 | 0.31 |
+| **overall** | **1986** | **0.43** | **0.60** | **0.63** |
 
 ## Reproduce
 
@@ -19,3 +21,6 @@ Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** =
 MNEME_EMBED_MODEL=text-embedding-3-small go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive \
   -model google/gemini-2.5-flash-lite -answer-model google/gemini-2.5-flash-lite -judge-model google/gemini-2.5-flash-lite
 ```
+
+wrote results to bench/results/oracle_source.md
+wrote 1986 predictions to bench/results/oracle_source.jsonl

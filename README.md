@@ -84,17 +84,22 @@ vLLM, LM Studio, etc.
 dominated by how well the extraction model captures facts, not by the embedder or
 retrieval tricks. In our LoCoMo A/B (answer and judge models pinned, n=1986
 questions), switching extraction from `gemini-2.5-flash-lite` to
-`gemini-2.5-flash` lifted the end-to-end judge score 0.23 → 0.30, with temporal
-questions 0.22 → 0.45; a stronger embedder, consolidation, and reranking each
-measured flat on the same harness. Treat these as relative numbers from our
-harness, not as comparable to published LoCoMo results — earlier harness
-versions scored the adversarial category against its trap answer instead of
-abstention, so the absolute scores will shift when the matrix is re-run under
-the corrected scoring. The `gpt-5-mini` and `deepseek-v3.2` bench runs failed
-before completing, so there is no end-to-end evidence about them either way;
-the small fixture eval suggests `gpt-5-mini` extracts more facts at higher
-cost, and nothing more. `text-embedding-3-small` is fine — a larger embedder
-did not help. See [`bench/RESULTS.md`](bench/RESULTS.md) for the full matrix.
+`gemini-2.5-flash` lifted the end-to-end judge score 0.48 → 0.52, and 0.34 → 0.40
+on the 1540 questions that have an answer at all (+0.057, 95% CI [+0.026,
++0.084], bootstrapped over conversations). Temporal questions carry most of the
+gain: 0.24 → 0.49. Consolidation measured as a real regression on the same
+harness. A stronger embedder trends slightly positive but does not separate from
+noise at our sample size, so it is not worth its cost on this evidence.
+
+Treat these as relative numbers from our harness rather than as comparable to
+published LoCoMo results. `gpt-5-mini` and `deepseek-v3.2` failed to complete a
+bench run, so there is no end-to-end evidence about them either way, and
+`text-embedding-3-small` is fine because a larger embedder did not help. The
+honest headline is that mneme still answers "I don't know" to 40% of the
+answerable questions, because the facts were never extracted. See
+[`bench/RESULTS.md`](bench/RESULTS.md) for the full matrix, the caveats, and the
+scoring-bug history behind an earlier set of numbers (0.23 → 0.30) that this
+supersedes.
 
 ## Public API
 
@@ -140,11 +145,18 @@ consequences you must design around:
   will lock in the wrong one.
 
 These are deliberate tradeoffs for the default strategy (simpler, one LLM call
-per `Add`). When staleness matters, opt into consolidation:
+per `Add`). When staleness matters more than recall, opt into consolidation:
 
 ```go
 m, _ := mneme.New(mneme.WithStrategy(mneme.Consolidate))
 ```
+
+**Consolidation costs recall on our benchmark, so it stays opt-in.** On LoCoMo it
+scores 0.31 against additive's 0.34 on answerable questions, and the reason is
+visible in the per-question dumps: it abstains on 47% of them where additive
+abstains on 40%, because it deletes facts the answerer would have used. Turn it
+on if your application genuinely needs "the current value" and can accept losing
+some history. Don't turn it on expecting a better score.
 
 Consolidate runs a second LLM call per `Add` that reconciles the new facts
 against the existing ones — UPDATE a changed value in place, DELETE a
@@ -190,9 +202,13 @@ m, _ := mneme.New(
   surface every needed fact. Expansion is best-effort: if the call or its parse
   fails, `Search` falls back to the original query alone.
 
-Each booster adds an LLM call per `Search` — opt in when retrieval accuracy is
-worth the cost. The `bench` harness exposes both as `-rerank` and `-multiquery n`.
-See `PLAN-v2.md` §4.3.
+Each booster adds an LLM call per `Search`, so opt in when retrieval accuracy is
+worth roughly 2× the query cost. On LoCoMo they lift multi-hop questions by
++0.07 (95% CI [+0.005, +0.135]) and do nothing measurable for temporal ones,
+which are the extraction model's job instead. Their effect on the answerable set
+as a whole does not separate from noise at our sample size, so treat them as a
+targeted fix for multi-hop retrieval rather than a general win. The `bench`
+harness exposes both as `-rerank` and `-multiquery n`. See `PLAN-v2.md` §4.3.
 
 ## Eval harness
 

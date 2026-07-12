@@ -1,2 +1,118 @@
 === [04:40:48] START additive_3small (extract=google/gemini-2.5-flash-lite embed=text-embedding-3-small) ===
 running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  answer: `google/gemini-2.5-flash-lite`  ·  judge: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `additive`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.96 | 0.96 | 0.96 |
+| multi_hop | 282 | 0.08 | 0.31 | 0.29 |
+| open_domain | 96 | 0.06 | 0.09 | 0.09 |
+| single_hop | 841 | 0.22 | 0.38 | 0.43 |
+| temporal | 321 | 0.06 | 0.19 | 0.24 |
+| **overall** | **1986** | **0.33** | **0.46** | **0.48** |
+
+## Reproduce
+
+```sh
+MNEME_EMBED_MODEL=text-embedding-3-small go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive \
+  -model google/gemini-2.5-flash-lite -answer-model google/gemini-2.5-flash-lite -judge-model google/gemini-2.5-flash-lite
+```
+
+wrote results to bench/results/additive_3small.md
+wrote 1986 predictions to bench/results/additive_3small.jsonl
+=== [05:00:19] DONE  additive_3small ===
+=== [05:00:19] START consolidate_3small (extract=google/gemini-2.5-flash-lite embed=text-embedding-3-small) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=consolidate
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  answer: `google/gemini-2.5-flash-lite`  ·  judge: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `consolidate`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.94 | 0.94 | 0.94 |
+| multi_hop | 282 | 0.05 | 0.27 | 0.26 |
+| open_domain | 96 | 0.07 | 0.09 | 0.08 |
+| single_hop | 841 | 0.19 | 0.34 | 0.39 |
+| temporal | 321 | 0.04 | 0.17 | 0.23 |
+| **overall** | **1986** | **0.31** | **0.42** | **0.45** |
+
+## Reproduce
+
+```sh
+MNEME_EMBED_MODEL=text-embedding-3-small go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy consolidate \
+  -model google/gemini-2.5-flash-lite -answer-model google/gemini-2.5-flash-lite -judge-model google/gemini-2.5-flash-lite
+```
+
+wrote results to bench/results/consolidate_3small.md
+wrote 1986 predictions to bench/results/consolidate_3small.jsonl
+=== [05:49:13] DONE  consolidate_3small ===
+=== [05:49:13] START additive_3large (extract=google/gemini-2.5-flash-lite embed=text-embedding-3-large) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash-lite`  ·  answer: `google/gemini-2.5-flash-lite`  ·  judge: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-large`  ·  k: 5  ·  strategy: `additive`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.94 | 0.94 | 0.94 |
+| multi_hop | 282 | 0.07 | 0.33 | 0.34 |
+| open_domain | 96 | 0.05 | 0.08 | 0.09 |
+| single_hop | 841 | 0.24 | 0.39 | 0.44 |
+| temporal | 321 | 0.06 | 0.21 | 0.27 |
+| **overall** | **1986** | **0.34** | **0.46** | **0.49** |
+
+## Reproduce
+
+```sh
+MNEME_EMBED_MODEL=text-embedding-3-large go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive \
+  -model google/gemini-2.5-flash-lite -answer-model google/gemini-2.5-flash-lite -judge-model google/gemini-2.5-flash-lite
+```
+
+wrote results to bench/results/additive_3large.md
+wrote 1986 predictions to bench/results/additive_3large.jsonl
+=== [06:13:34] DONE  additive_3large ===
+=== [06:13:34] START additive_boosters (extract=google/gemini-2.5-flash-lite embed=text-embedding-3-small) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash-lite, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samplesbench: sample "conv-43": answer LLM call: openai /chat/completions: giving up after 5 attempts: openai /chat/completions: read response: context deadline exceeded (Client.Timeout or context cancellation while reading body)
+exit status 1
+=== [06:34:27] FAILED additive_boosters (continuing) ===
+=== [06:34:27] START extract_flash (extract=google/gemini-2.5-flash embed=text-embedding-3-small) ===
+running locomo: 10 samples, 1986 questions, model=google/gemini-2.5-flash, embedder=openai, k=5, strategy=additive
+  scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples  scored 6/10 samples  scored 7/10 samples  scored 8/10 samples  scored 9/10 samples  scored 10/10 samples
+# mneme bench results — locomo
+
+dataset: `bench/data/locomo10.json`  ·  model: `google/gemini-2.5-flash`  ·  answer: `google/gemini-2.5-flash-lite`  ·  judge: `google/gemini-2.5-flash-lite`  ·  embedder: `text-embedding-3-small`  ·  k: 5  ·  strategy: `additive`
+
+Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match. n = question count.
+
+| category | n | EM | F1 | judge |
+|---|---|---|---|---|
+| adversarial | 446 | 0.94 | 0.94 | 0.94 |
+| multi_hop | 282 | 0.07 | 0.28 | 0.28 |
+| open_domain | 96 | 0.07 | 0.10 | 0.14 |
+| single_hop | 841 | 0.23 | 0.38 | 0.43 |
+| temporal | 321 | 0.09 | 0.31 | 0.49 |
+| **overall** | **1986** | **0.34** | **0.47** | **0.52** |
+
+## Reproduce
+
+```sh
+MNEME_EMBED_MODEL=text-embedding-3-small go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -strategy additive \
+  -model google/gemini-2.5-flash -answer-model google/gemini-2.5-flash-lite -judge-model google/gemini-2.5-flash-lite
+```
+
+wrote results to bench/results/extract_flash.md
+wrote 1986 predictions to bench/results/extract_flash.jsonl
+=== [06:59:56] DONE  extract_flash ===
+=== [06:59:56] MATRIX COMPLETE ===

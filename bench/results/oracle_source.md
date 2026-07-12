@@ -6,12 +6,12 @@ Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** =
 
 | category | n | EM | F1 | judge |
 |---|---|---|---|---|
-| adversarial | 446 | 0.96 | 0.96 | 0.96 |
-| multi_hop | 282 | 0.08 | 0.31 | 0.29 |
-| open_domain | 96 | 0.06 | 0.09 | 0.09 |
-| single_hop | 841 | 0.22 | 0.38 | 0.43 |
-| temporal | 321 | 0.06 | 0.19 | 0.24 |
-| **overall** | **1986** | **0.33** | **0.46** | **0.48** |
+| adversarial | 446 | 0.93 | 0.93 | 0.93 |
+| multi_hop | 282 | 0.18 | 0.50 | 0.56 |
+| open_domain | 96 | 0.09 | 0.13 | 0.16 |
+| single_hop | 841 | 0.41 | 0.62 | 0.67 |
+| temporal | 321 | 0.11 | 0.32 | 0.31 |
+| **overall** | **1986** | **0.43** | **0.60** | **0.63** |
 
 ## Reproduce
 
