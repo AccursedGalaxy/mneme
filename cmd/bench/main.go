@@ -54,6 +54,7 @@ func run() error {
 		rawWindow = flag.Int("rawturn-window", 1, "with -strategy rawturns, how many consecutive messages per stored chunk (1 = one turn per record)")
 		oracle    = flag.String("oracle", "", "replace part of the pipeline with ground truth to isolate a stage. 'source' answers from the dataset's own evidence turns (no ingest, no retrieval) — the ceiling any memory system can reach here")
 		cprompt   = flag.String("cprompt", "", "consolidation prompt version (e.g. v1 | v2); empty = library default. Only used with -strategy consolidate")
+		aprompt   = flag.String("answer-version", bench.DefaultAnswerVersion, "answer prompt version (v1 | v2). v2 is the default: it relaxes v1's over-strict abstention and resolves relative dates against the memory's timestamp")
 		rerank    = flag.Bool("rerank", false, "enable the LLM rerank pass in Search (over-retrieve, reorder, truncate to k)")
 		multiQ    = flag.Int("multiquery", 0, "if >1, expand each question into this many search phrasings and union the hits before reranking")
 		concur    = flag.Int("concurrency", 8, "questions scored in parallel per sample (ingestion stays sequential); 1 = serial")
@@ -149,6 +150,7 @@ func run() error {
 		K:                    *k,
 		Strategy:             *strategy,
 		ConsolidationVersion: *cprompt,
+		AnswerVersion:        *aprompt,
 		Reranker:             reranker,
 		MultiQuery:           *multiQ,
 		RawTurnWindow:        *rawWindow,

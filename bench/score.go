@@ -1,8 +1,11 @@
 package bench
 
 import (
+	"context"
 	"sort"
 	"strings"
+
+	"github.com/AccursedGalaxy/mneme/eval"
 )
 
 // QAResult is one question's score under the harness: the deterministic
@@ -136,6 +139,26 @@ func abstained(pred string) bool {
 		}
 	}
 	return false
+}
+
+// Score grades one predicted answer, and is the single definition of how a
+// question is scored: an unanswerable question is graded purely on whether the
+// model abstained, and every other question on EM, token-F1, and the semantic
+// judge. Run, the source oracle, and cmd/replay all go through here, so an
+// offline replay of a dump is scored byte-for-byte the way the original run was.
+//
+// gold is ignored when unanswerable is set — adversarial questions have no gold
+// answer, only a trap distractor, and grading against it is what the 2026-07-12
+// erratum was.
+func Score(ctx context.Context, judge eval.Judge, unanswerable bool, pred, gold string) (em bool, f1Score float64, judged bool) {
+	if unanswerable {
+		ok := abstained(pred)
+		if ok {
+			return true, 1, true
+		}
+		return false, 0, false
+	}
+	return exactMatch(pred, gold), f1(pred, gold), judge.Same(ctx, pred, gold)
 }
 
 // f1 is the SQuAD-style token-overlap F1 between a predicted and gold answer,

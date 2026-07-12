@@ -102,6 +102,13 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 		cfg.Concurrency = 1
 	}
 
+	if _, ok := answerPrompts[cfg.AnswerVersion]; !ok {
+		// Silently falling back to the default would make a typo'd version look
+		// like a real result for the wrong prompt, which is the class of bug the
+		// adversarial-scoring erratum already cost a paid re-run to catch.
+		return Report{}, fmt.Errorf("unknown answer prompt version %q (have %v)", cfg.AnswerVersion, AnswerPrompts())
+	}
+
 	if err := validateOracle(cfg.Oracle); err != nil {
 		return Report{}, err
 	}
@@ -264,22 +271,7 @@ func scoreQuestion(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM
 		Unanswerable: q.Unanswerable,
 		Retrieved:    factTexts(facts),
 	}
-	if q.Unanswerable {
-		// The gold behavior is abstention: all three metrics collapse to
-		// "did the system decline to answer". No judge call — a semantic
-		// match against an empty gold is meaningless. Gold stays empty (the
-		// trap answer is never gold); the flag is what carries the rule.
-		ok := abstained(pred)
-		res.EM = ok
-		res.Judge = ok
-		if ok {
-			res.F1 = 1
-		}
-		return res, nil
-	}
-	res.EM = exactMatch(pred, q.Answer)
-	res.F1 = f1(pred, q.Answer)
-	res.Judge = judge.Same(ctx, pred, q.Answer)
+	res.EM, res.F1, res.Judge = Score(ctx, judge, q.Unanswerable, pred, q.Answer)
 	return res, nil
 }
 

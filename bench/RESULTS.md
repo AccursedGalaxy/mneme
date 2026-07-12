@@ -6,6 +6,12 @@ Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** =
 
 Re-run 2026-07-12 under the corrected adversarial scoring. These numbers supersede everything published before that date; see [Scoring history](#scoring-history). Answer and judge are pinned to flash-lite on every row, so a row that changes the extraction model isolates the model that writes facts to the store.
 
+> **Every row in this matrix uses answer prompt v1, which is no longer the default.** v2 (now
+> default) is worth up to +0.10 answerable, and it changes which row wins — see
+> [The answer stage](#the-answer-stage-two-prompt-bugs-worth-010). The matrix has not been re-run
+> under v2. Rankings *between* rows should hold, since the answer prompt cannot affect retrieval,
+> but do not quote these absolute numbers as current.
+
 ## Lever matrix — Judge by category
 
 | run | single (841) | multi (282) | temporal (321) | open (96) | adversarial (446) | **overall (1986)** |
@@ -53,6 +59,78 @@ The ceiling that follows: **0.54 answerable is the most this answer model and ju
 
 One caveat against over-reading the oracle as a hard ceiling: it is *not* an upper bound per category. Flash extraction beats it on temporal (0.49 vs 0.31), because extraction normalizes relative dates ("last Tuesday") into absolute ones, information the raw evidence turns do not carry. Extraction can add derived value, not just lose it. That is the strongest argument left for keeping a fact pipeline at all.
 
+## The answer stage: two prompt bugs worth ~0.10
+
+The oracle above says memory owns only ~17 of the 40 abstention points. This section
+opens up the other 23. Everything here was mined from the existing `.jsonl` dumps and
+an offline replay of the answer step — no re-ingest, no re-retrieval.
+
+Decomposing the oracle's 1540 answerable questions: **839 correct, 353 abstentions, and
+349 answered-but-judged-wrong.** That second pool had never been counted. It is as large
+as the abstention pool, and it has a different cause.
+
+Two failures, both in the v1 answer prompt (`bench/qa.go`):
+
+1. **The abstention rule is too strong.** The answerer replies "I don't know." to questions
+   whose answer is verbatim in the evidence, whenever the memory states it in passing or as
+   something the speaker realized rather than as a flat assertion. Given *"I'm starting to
+   realize that self-care is really important"* and asked what Melanie realized, flash-lite
+   declines. This is not a weak-model problem: `gemini-2.5-flash` declines on the same cases
+   under the same prompt.
+
+2. **Relative dates are never resolved.** Of 144 temporal misses at the oracle, the gold
+   string appears literally in the evidence in **2**. In 85 the evidence says "yesterday" /
+   "last week" / "next month" and the answerer echoes the relative phrase back — even though
+   the turn's timestamp is right there in the text it was handed.
+
+**Answer prompt v2** relaxes the abstention rule and requires relative dates to be resolved
+against the memory's timestamp prefix. Replayed offline against every existing dump:
+
+| run | v1 answerable | v2 answerable | paired Δ [95% CI] |
+|---|---|---|---|
+| oracle · source (ceiling) | 0.545 | **0.642** | **+0.097 [+0.081, +0.112]** |
+| **rawturns** | 0.388 | **0.451** | **+0.063 [+0.045, +0.082]** |
+| additive · 3-small | 0.341 | 0.337 | −0.004 [−0.016, +0.008] |
+| additive · extract=flash | 0.398 | 0.387 | −0.011 [−0.023, +0.001] |
+
+Cost: the adversarial category drops 0.96 → 0.93. A looser abstention rule takes a few more
+bites on the traps. That is 3 points on 446 questions against 6–10 points on 1540, so v2
+ships as the default; v1 stays registered so these rows stay reproducible.
+
+### Why the fact pipeline gets nothing from it
+
+**The date rule needs a timestamp to resolve against, and facts do not carry one.** 100% of
+retrieved raw turns carry a source timestamp prefix. 0% of retrieved facts do. The same fact,
+from both extractors:
+
+```
+additive (flash-lite):  Caroline attended an LGBTQ support group on 2026-07-11.   <- the INGEST date
+extract flash:          Caroline attended an LGBTQ support group on 2023-05-07.   <- the event date
+```
+
+flash-lite is stamping the ingestion date into the fact text. That is the whole of its temporal
+deficit, and it is why flash extraction wins temporal (finding #5): flash does the date
+arithmetic correctly at extraction time. Buying date normalization from a stronger extraction
+model is an expensive way to obtain something the raw turn carries for free — and gets wrong
+5× cheaper when the extractor slips.
+
+The consequence reorders the board:
+
+> **rawturns + answer v2 = 0.451 answerable is the best configuration measured**, beating flash
+> extraction (0.398) while making zero extraction LLM calls. The ceiling also moved, 0.545 →
+> 0.642, so there is *more* memory headroom now, not less.
+
+This is the concrete form of the extraction-loss argument. What extraction throws away is not
+mainly content — it is **provenance**. The timestamp, the speaker, and the source turn are
+dissolved into prose, and every downstream stage that needs them has to guess. `types.Fact` is
+text + hash + scope + `CreatedAt` (ingest time), which is why there is nothing better to do.
+
+Two caveats. These numbers are an offline replay of the answer step against stored `retrieved`
+sets, so retrieval is held fixed at what v1's run produced; a full v2 re-run could differ where
+v2's behavior would have changed nothing upstream anyway (it cannot — retrieval does not see the
+answer prompt). And the adversarial delta was measured on the real pipeline dumps, not the
+oracle, because the oracle hands adversarial questions no evidence by construction.
+
 ## What this settles (measured, not guessed)
 
 1. **The system abstains correctly: adversarial 0.96.** LoCoMo's adversarial questions are unanswerable traps, and mneme declines them almost every time. The answer prompt's explicit "say I don't know" instruction is doing its job. Worth keeping, but it is not a lever, and averaging it into a headline meant to guide work only obscures the rows that differ.
@@ -69,7 +147,13 @@ One caveat against over-reading the oracle as a hard ceiling: it is *not* an upp
 
    Two honest caveats. The boosters' multi-hop interval only barely excludes zero, and it is one of several categories examined, so it deserves the skepticism that any barely-significant subgroup result does. And their aggregate effect stays unresolvable, because a real gain on 282 multi-hop questions dilutes across 1540. Boosters cost roughly 2× per query, so the question is whether that multi-hop gain holds up when it is paid for.
 
-**Recommendation: use `gemini-2.5-flash` for extraction, not flash-lite.** Roughly 5× the per-fact cost ($0.0017 vs $0.00034) for +0.057 [+0.026, +0.084] answerable Judge, most of it temporal. Boosters stay opt-in and undefaulted, pending a combined run and more conversations.
+**Recommendation (v1 answer prompt): use `gemini-2.5-flash` for extraction, not flash-lite.** Roughly 5× the per-fact cost ($0.0017 vs $0.00034) for +0.057 [+0.026, +0.084] answerable Judge, most of it temporal. Boosters stay opt-in and undefaulted, pending a combined run and more conversations.
+
+> **This recommendation does not survive answer prompt v2.** Almost all of flash's edge was
+> temporal date normalization, and v2 gets that from the source timestamp instead — for free, and
+> more reliably. Under v2, rawturns (0.451, no extraction model at all) beats flash extraction
+> (0.387). If you are paying 5× for extraction, pay it for something the raw turn cannot give you.
+> See [The answer stage](#the-answer-stage-two-prompt-bugs-worth-010).
 
 ## Extraction-model A/B (eval fixtures)
 
@@ -86,16 +170,31 @@ Two models were ruled out on the bench and are not worth revisiting. gpt-5-mini 
 
 ## Where the signal points next
 
-The stage decomposition reorders the work, and not in the direction this document previously argued.
+The stage decomposition reordered the work, and the answer-stage section above has now cashed
+the first item in.
 
-1. **The answer stage, not extraction.** 23 of the 40 abstention points survive gold evidence. That is the largest single pool of recoverable score on the board, it is a prompt-and-model problem rather than a memory problem, and nobody has looked at it. Start by reading the oracle's abstentions in `bench/results/oracle_source.jsonl`: they are cases where the model held the answer and declined anyway.
-2. **A hybrid store, not a better extractor.** Raw turns beat extracted facts on aggregate, for free, while extraction wins temporal by normalizing dates. Those are complementary, which is the Phase 1 hybrid store: keep the episodes *and* the derived facts, and retrieve over both.
-3. **Extraction recall on implied and causal facts (tk #11)** drops down the list. It is real work, but it is chasing a smaller pool than #1, and the raw-turn result suggests the fact representation itself is the weaker part of the design.
-4. **open_domain (0.07–0.16) is the weakest category everywhere,** including the oracle, which manages only 0.16. A category the ceiling itself cannot score is a question-format or judge problem, not a memory one. Worth 20 minutes with the dumps before anyone builds anything for it.
-
-- **Extraction recall on implied and causal facts (tk #11).** The additive extractor writes down what was stated. Many LoCoMo golds are realizations, causes, and attributes that a speaker implied rather than asserted, and those never enter the store.
-- **Temporal** is the second-largest gap now (0.49 with flash, up from 0.24), though no longer the worst.
-- **open_domain (0.09 to 0.14) is the weakest category** and nobody has looked at it. Whether that is an extraction gap or an answer-prompt gap is a question the dumps can settle without a re-run.
+1. ~~The answer stage, not extraction.~~ **Done: answer prompt v2**, worth +0.097 at the oracle
+   and +0.063 on rawturns. It also raised the ceiling to 0.642, which *re-opens* memory headroom
+   rather than closing it.
+2. **Persist source timestamps on facts.** This is now the highest-value memory change on the
+   board, and it is small. A fact is text + hash + scope + ingest time, so the v2 date rule has
+   nothing to bite on and flash-lite's ingest-date corruption has nothing to correct it. Give
+   `types.Fact` an `ObservedAt` (the source turn's timestamp) and render it into the memory block
+   the way rawturns already does. This is the cheap half of structured attribution — do it before
+   subjects, predicates, and validity intervals.
+3. **A hybrid store, not a better extractor.** Raw turns beat extracted facts on aggregate, for
+   free, and the gap *widened* under v2 (0.451 vs 0.387). Extraction still earns its keep only
+   where it derives something the turn does not carry. Keep the episodes *and* the derived facts,
+   and retrieve over both.
+4. **A full v2 re-run of the matrix.** Every row above is a v1 run. The rankings between rows are
+   unlikely to move (v2 does not touch retrieval), but the headline numbers are now stale by
+   construction and the boosters × flash combination is still unrun.
+5. **Extraction recall on implied and causal facts (tk #11)** drops further down. The raw-turn
+   result keeps suggesting the fact representation itself, not its recall, is the weaker part.
+6. **open_domain (0.06–0.17) is the weakest category everywhere,** including the oracle, which
+   manages 0.17 under v2 (up from 0.06). A category the ceiling itself cannot score is a
+   question-format or judge problem, not a memory one — and the judge is still unvalidated
+   against human labels, which is the one piece of the harness nothing else can backstop.
 
 ## Scoring history
 
@@ -118,4 +217,16 @@ go run ./cmd/bench -dataset locomo -path bench/data/locomo10.json -k 5 -concurre
 
 # full matrix (~2.5h, ~$2)
 bash bench/run_matrix.sh
+```
+
+Re-measuring an **answer-stage** change (a new answer prompt, a different answer model) does
+not need a run at all. The dump records the facts each question's answerer saw, and the answer
+prompt cannot affect retrieval, so replaying against a finished dump is exact rather than an
+approximation — and costs one answer call per question instead of a full re-ingest. This is how
+the v2 table above was produced:
+
+```sh
+go run ./cmd/replay -answer-version v2 \
+  -in bench/results/rawturns_w1.jsonl -out bench/results/rawturns_w1_v2.jsonl
+go run ./cmd/rescore -baseline bench/results/rawturns_w1.jsonl bench/results/rawturns_w1_v2.jsonl
 ```

@@ -402,6 +402,41 @@ func TestRunUnknownStrategy(t *testing.T) {
 	}
 }
 
+func TestRunUnknownAnswerVersion(t *testing.T) {
+	st, _ := sqlite.Open(":memory:")
+	defer st.Close()
+	_, err := Run(context.Background(), nil, Config{
+		LLM:           &fake.LLM{Default: `{"memory":[]}`},
+		Embedder:      &fake.Embedder{D: 64},
+		Store:         st,
+		AnswerVersion: "v99",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown answer prompt version") {
+		t.Errorf("an unknown answer version must fail loudly, not silently score the default prompt; got %v", err)
+	}
+}
+
+// The answer prompt is a measured score lever, so a shipped version is frozen:
+// a change is a new entry. v2 is the default because v1's over-strict abstention
+// and unresolved relative dates cost ~0.10 answerable Judge at the source oracle
+// (bench/RESULTS.md). v1 stays registered so that result stays reproducible.
+func TestAnswerPromptRegistry(t *testing.T) {
+	if DefaultAnswerVersion != "v2" {
+		t.Errorf("default answer version = %q, want v2", DefaultAnswerVersion)
+	}
+	for _, v := range []string{"v1", "v2"} {
+		if _, ok := answerPrompts[v]; !ok {
+			t.Errorf("answer prompt %q must stay registered for reproducibility", v)
+		}
+	}
+	if !strings.Contains(answerPrompts["v2"], "absolute date") {
+		t.Error("v2 must carry the relative-date resolution rule; it is most of the gain")
+	}
+	if answerSystem("v1") == answerSystem("v2") {
+		t.Error("v1 and v2 must be distinct prompts")
+	}
+}
+
 // mentionsBoth reports whether token appears at least twice in s (used by the
 // fake judge: both Statement A and Statement B mention it).
 func mentionsBoth(s, token string) bool {

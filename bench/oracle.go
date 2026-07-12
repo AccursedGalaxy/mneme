@@ -61,18 +61,7 @@ func scoreOracleQuestion(ctx context.Context, answerLLM provider.LLM, judge eval
 		Unanswerable: q.Unanswerable,
 		Retrieved:    factTexts(facts),
 	}
-	if q.Unanswerable {
-		ok := abstained(pred)
-		res.EM = ok
-		res.Judge = ok
-		if ok {
-			res.F1 = 1
-		}
-		return res, nil
-	}
-	res.EM = exactMatch(pred, q.Answer)
-	res.F1 = f1(pred, q.Answer)
-	res.Judge = judge.Same(ctx, pred, q.Answer)
+	res.EM, res.F1, res.Judge = Score(ctx, judge, q.Unanswerable, pred, q.Answer)
 	return res, nil
 }
 
