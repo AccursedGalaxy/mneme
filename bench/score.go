@@ -17,6 +17,11 @@ type QAResult struct {
 	Predicted string
 	Category  string
 
+	// Unanswerable mirrors QAPair.Unanswerable: the gold behavior is abstention
+	// and Gold is empty. Carried on the result so a re-score from a dumped run
+	// can apply the abstention rule without re-reading the dataset.
+	Unanswerable bool
+
 	// Retrieved is the text of the top-k facts fed to the answer model for this
 	// question. Carried for the -v diagnostic dump so a wrong answer can be
 	// traced to a missing/merged/distorted fact rather than just observed.

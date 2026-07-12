@@ -211,18 +211,19 @@ func scoreQuestion(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM
 		return QAResult{}, err
 	}
 	res := QAResult{
-		SampleID:  sampleID,
-		Question:  q.Question,
-		Gold:      q.Answer,
-		Predicted: pred,
-		Category:  q.Category,
-		Retrieved: factTexts(facts),
+		SampleID:     sampleID,
+		Question:     q.Question,
+		Gold:         q.Answer,
+		Predicted:    pred,
+		Category:     q.Category,
+		Unanswerable: q.Unanswerable,
+		Retrieved:    factTexts(facts),
 	}
 	if q.Unanswerable {
 		// The gold behavior is abstention: all three metrics collapse to
 		// "did the system decline to answer". No judge call — a semantic
-		// match against an empty gold is meaningless.
-		res.Gold = "(unanswerable — correct behavior is to abstain)"
+		// match against an empty gold is meaningless. Gold stays empty (the
+		// trap answer is never gold); the flag is what carries the rule.
 		ok := abstained(pred)
 		res.EM = ok
 		res.Judge = ok

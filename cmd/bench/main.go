@@ -58,6 +58,7 @@ func run() error {
 		limit     = flag.Int("limit", 0, "if >0, run only the first N samples (smoke test)")
 		maxQ      = flag.Int("maxq", 0, "if >0, cap questions per sample (smoke/cost control)")
 		out       = flag.String("out", "", "results file to write (markdown), e.g. bench/results/<run>.md; empty prints to stdout only. Never point this at bench/RESULTS.md — that file is the hand-curated analysis, not a raw run dump")
+		dump      = flag.String("dump", "", "per-question predictions file (JSONL). Defaults to -out with a .jsonl suffix; set to 'off' to skip. Keeping this makes a later scoring fix a free local re-score instead of a paid re-run")
 		verbose   = flag.Bool("v", false, "print each question's gold/predicted answer")
 	)
 	flag.Parse()
@@ -198,7 +199,43 @@ func run() error {
 		}
 		fmt.Fprintf(os.Stderr, "\nwrote results to %s\n", *out)
 	}
+
+	if path := dumpPath(*dump, *out); path != "" {
+		if err := writeDump(path, report); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "wrote %d predictions to %s\n", len(report.Results), path)
+	}
 	return nil
+}
+
+// dumpPath resolves where the per-question JSONL goes: an explicit -dump wins,
+// "off" disables it, and an empty -dump derives the path from -out (so every
+// run that produces a results file also preserves the predictions behind it).
+func dumpPath(dump, out string) string {
+	switch {
+	case dump == "off":
+		return ""
+	case dump != "":
+		return dump
+	case out == "":
+		return "" // stdout-only smoke run; nothing to sit beside
+	default:
+		return strings.TrimSuffix(out, ".md") + ".jsonl"
+	}
+}
+
+func writeDump(path string, report bench.Report) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	if err := bench.WritePredictions(w, report); err != nil {
+		return err
+	}
+	return w.Flush()
 }
 
 // capBalanced returns at most n questions chosen round-robin across categories,
@@ -345,7 +382,11 @@ func printAnswers(report bench.Report) {
 		if r.Judge {
 			mark = "✓"
 		}
-		fmt.Fprintf(os.Stderr, "[%s] %s\n   Q: %s\n   gold: %s\n   pred: %s\n", mark, r.Category, r.Question, r.Gold, r.Predicted)
+		gold := r.Gold
+		if r.Unanswerable {
+			gold = "(unanswerable — correct behavior is to abstain)"
+		}
+		fmt.Fprintf(os.Stderr, "[%s] %s\n   Q: %s\n   gold: %s\n   pred: %s\n", mark, r.Category, r.Question, gold, r.Predicted)
 		for _, f := range r.Retrieved {
 			fmt.Fprintf(os.Stderr, "   · %s\n", f)
 		}
