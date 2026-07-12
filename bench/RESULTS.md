@@ -32,11 +32,32 @@ Intervals are 10k bootstrap resamples over conversations (the unit of independen
 
 **Only two effects are resolvable at n=10 conversations.** Flash extraction helps; consolidation hurts. The bigger embedder and the retrieval boosters both trend positive by about the same amount and neither interval excludes zero. Do not read their point estimates as a ranking, and do not ship either on this evidence. Getting these to resolve needs more conversations, not more matrix rows.
 
+## Stage decomposition: where the score is actually lost
+
+Two control runs, neither of which the matrix had ever included. **rawturns** stores the conversation verbatim and never calls an extraction model. **oracle/source** answers from the dataset's own evidence turns, with no store and no retrieval at all, so it bounds what any memory system can score with this answerer and judge.
+
+| run | answerable Judge | paired Δ vs baseline [95% CI] | abstains on answerable |
+|---|---|---|---|
+| additive · 3-small (baseline) | 0.34 | — | 40.0% |
+| **rawturns** (no extraction at all) | **0.39** | **+0.047 [+0.010, +0.092]** | 37.7% |
+| additive · extract=flash | 0.40 | +0.057 [+0.024, +0.083] | 39.6% |
+| **oracle · source** (gold evidence turns) | **0.54** | **+0.204 [+0.173, +0.234]** | **22.9%** |
+
+Two results here, and both are load-bearing.
+
+**Storing the raw conversation beats the fact-extraction pipeline.** rawturns scores +0.047 over additive with an interval that excludes zero, and it does that with *zero* extraction LLM calls: it is cheaper than the thing it beats. Single-hop, the largest category, goes 0.43 → 0.54. On aggregate it is statistically indistinguishable from the flash-extraction run, which costs 5× per fact. So extraction, as currently implemented, is not earning its cost against simply keeping the text.
+
+**The answer model abstains on 22.9% of answerable questions even when handed the gold evidence turns.** That is the finding that reframes everything below. The 40% abstention rate was read as an extraction-recall failure, and the roadmap was pointed at extraction on that basis. But more than half of it survives perfect retrieval. Of the 40 points, roughly 23 belong to the answerer, its prompt, or the judge, and only ~17 are attributable to memory at all.
+
+The ceiling that follows: **0.54 answerable is the most this answer model and judge can score on LoCoMo even with perfect memory.** Memory work has 0.20 of headroom between the baseline and that ceiling. The remaining 0.46 sits in the answer prompt, the answer model, and the judge, and no amount of extraction or retrieval work will touch it.
+
+One caveat against over-reading the oracle as a hard ceiling: it is *not* an upper bound per category. Flash extraction beats it on temporal (0.49 vs 0.31), because extraction normalizes relative dates ("last Tuesday") into absolute ones, information the raw evidence turns do not carry. Extraction can add derived value, not just lose it. That is the strongest argument left for keeping a fact pipeline at all.
+
 ## What this settles (measured, not guessed)
 
 1. **The system abstains correctly: adversarial 0.96.** LoCoMo's adversarial questions are unanswerable traps, and mneme declines them almost every time. The answer prompt's explicit "say I don't know" instruction is doing its job. Worth keeping, but it is not a lever, and averaging it into a headline meant to guide work only obscures the rows that differ.
 
-2. **The bottleneck: mneme abstains on 40% of the questions that *do* have answers.** On the 1540 answerable questions, the baseline says "I don't know" to 616 of them. Retrieval is not misranking those facts and the answerer is not fumbling the phrasing. The facts simply are not in the store, so there is nothing to retrieve and declining is the correct move. Mined from `bench/results/additive_3small.jsonl`.
+2. **mneme abstains on 40% of the questions that *do* have answers — but memory owns only about 17 points of that.** On the 1540 answerable questions the baseline says "I don't know" to 616 of them. The obvious reading, which this document asserted before the oracle run existed, was that the answering fact was never extracted. The source oracle refutes it: hand the answer model the exact gold evidence turns and it still abstains on 22.9%. Most of the abstention is downstream of memory, in the answer prompt, the answer model, or the judge. Only the difference (roughly 17 points) is a memory problem. Mined from `bench/results/*.jsonl` at no API cost.
 
 3. **Consolidation v1 is still a net loss: 0.34 → 0.31 answerable.** The dumps say why. It abstains on 47% of answerable questions where the baseline abstains on 40%, which means it is deleting facts the answerer would otherwise have used. Decision: `additive` stays the default. Consolidation remains available as an opt-in for callers who need a current value more than they need recall, and the README says so in those terms. It is not a path to a better score, and the v2 prompt would have to recover that lost recall before it becomes one.
 
@@ -65,7 +86,12 @@ Two models were ruled out on the bench and are not worth revisiting. gpt-5-mini 
 
 ## Where the signal points next
 
-The bottleneck sits upstream of retrieval, and finding #2 puts a number on it: 616 answerable questions where mneme has nothing to say. No reranker can surface a fact that was never stored, which is why extraction recall is the headline work. But finding #6 is a warning against over-reading that: reranking does help the questions whose facts *are* in the store, and we nearly discarded it on a scoring artifact.
+The stage decomposition reorders the work, and not in the direction this document previously argued.
+
+1. **The answer stage, not extraction.** 23 of the 40 abstention points survive gold evidence. That is the largest single pool of recoverable score on the board, it is a prompt-and-model problem rather than a memory problem, and nobody has looked at it. Start by reading the oracle's abstentions in `bench/results/oracle_source.jsonl`: they are cases where the model held the answer and declined anyway.
+2. **A hybrid store, not a better extractor.** Raw turns beat extracted facts on aggregate, for free, while extraction wins temporal by normalizing dates. Those are complementary, which is the Phase 1 hybrid store: keep the episodes *and* the derived facts, and retrieve over both.
+3. **Extraction recall on implied and causal facts (tk #11)** drops down the list. It is real work, but it is chasing a smaller pool than #1, and the raw-turn result suggests the fact representation itself is the weaker part of the design.
+4. **open_domain (0.07–0.16) is the weakest category everywhere,** including the oracle, which manages only 0.16. A category the ceiling itself cannot score is a question-format or judge problem, not a memory one. Worth 20 minutes with the dumps before anyone builds anything for it.
 
 - **Extraction recall on implied and causal facts (tk #11).** The additive extractor writes down what was stated. Many LoCoMo golds are realizations, causes, and attributes that a speaker implied rather than asserted, and those never enter the store.
 - **Temporal** is the second-largest gap now (0.49 with flash, up from 0.24), though no longer the worst.
