@@ -61,6 +61,50 @@ gate for cutting it — see `bench/RESULTS.md` and `PLAN-v2.md` §10.
 ### Fixed
 - Consolidation detects no-op `UPDATE`s against a target that was concurrently
   deleted, instead of reporting a phantom write.
+- **Consolidation blast-radius cap**: at most one UPDATE/DELETE of an existing
+  memory is applied per extracted candidate, so a hostile or confused
+  conversation turn (prompt injection reaching the consolidation LLM) can no
+  longer rewrite or wipe the whole reconciliation window in one `Add`. Prompt
+  rendering also flattens role/name and indents multi-line message content so
+  a message cannot forge speaker turns or section headers.
+- **`":memory:"` stores survive connection-pool churn**: the store now uses a
+  uniquely named shared-cache in-memory database with a pinned anchor
+  connection. Previously, `database/sql` discarding the single pooled
+  connection (e.g. after a context cancelled mid-query) silently replaced the
+  database with an empty one.
+- **Concurrent-`Add` dedup backstop in the store**: `Insert` skips a record
+  whose `(scope, hash)` already exists, inside the write transaction, so two
+  racing `Add`s extracting the same fact can no longer both insert it.
+  Consolidation `UPDATE`s are deliberately not constrained.
+- **Silent-corruption guards**: empty embedding vectors are rejected at the
+  client, pipeline, and store layers (previously stored and unretrievable
+  forever); mixed-dimension batches are rejected; a truncated embedding BLOB
+  surfaces a read error instead of decoding short; `Cosine` collapses NaN to 0
+  so one corrupt vector cannot scramble search ordering.
+- **Reranker no longer corrupts `Fact.Score`**: `openai.LLMReranker` reorders
+  candidates without writing model-internal values (including a `-1` sentinel
+  for unscored candidates) into the public score field, and degrades to the
+  cosine order on a failed LLM call instead of failing `Search`.
+- **Client hardening**: an explicit `temperature` rejected by reasoning-family
+  models triggers one retry without the parameter; a response body cut off
+  mid-read is retried instead of trusted; cancellation during retry backoff
+  reports the error that caused the retrying alongside the context error. The
+  retry loop is now covered by fast unit tests.
+- **Consolidation honors context cancellation** instead of falling back to an
+  additive insert with a dead context and misattributing the failure.
+- **LoCoMo adversarial scoring inverted** (`bench/`): category-5 questions are
+  unanswerable and are now scored as abstention checks; previously the loader
+  used the `adversarial_answer` *trap* field as gold, scoring correct
+  abstentions 0 across 22% of the question set. Absolute historical numbers in
+  `bench/RESULTS.md` are annotated with an erratum; relative deltas stand.
+- **Bench provenance**: result files and their `## Reproduce` commands now
+  record the answer/judge/embedding models; `cmd/bench -out` no longer
+  defaults to overwriting the curated `bench/RESULTS.md`.
+- **Workflow injection sinks closed**: release notes are passed to
+  `gh release create` via `--notes-file` (changelog text no longer expands in
+  a shell holding a write token), and the eval workflow reads its dispatch
+  input from `env` (no expansion in a shell holding the API key). The eval
+  gate also pins its judge model so the oracle is constant across runs.
 
 ## [0.1.0] - 2026-06-01
 

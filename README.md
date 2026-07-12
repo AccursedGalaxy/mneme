@@ -82,14 +82,19 @@ vLLM, LM Studio, etc.
 
 **Recommended extraction model: `google/gemini-2.5-flash`.** Memory quality is
 dominated by how well the extraction model captures facts, not by the embedder or
-retrieval tricks. On the full LoCoMo benchmark, switching extraction from
-`gemini-2.5-flash-lite` to `gemini-2.5-flash` lifts end-to-end answer accuracy
-**0.23 → 0.30** (temporal questions 0.22 → 0.45) — a bigger gain than a stronger
-embedder, consolidation, or reranking combined, all of which measured flat. A
-mid-tier model (`gpt-4o-mini`, `gemini-2.5-flash-lite`) works but extracts fewer
-and vaguer facts; reasoning models (`gpt-5-mini`) over-extract and cost more for
-no gain. `text-embedding-3-small` is fine — a larger embedder did not help. See
-[`bench/RESULTS.md`](bench/RESULTS.md) for the full matrix.
+retrieval tricks. In our LoCoMo A/B (answer and judge models pinned, n=1986
+questions), switching extraction from `gemini-2.5-flash-lite` to
+`gemini-2.5-flash` lifted the end-to-end judge score 0.23 → 0.30, with temporal
+questions 0.22 → 0.45; a stronger embedder, consolidation, and reranking each
+measured flat on the same harness. Treat these as relative numbers from our
+harness, not as comparable to published LoCoMo results — earlier harness
+versions scored the adversarial category against its trap answer instead of
+abstention, so the absolute scores will shift when the matrix is re-run under
+the corrected scoring. The `gpt-5-mini` and `deepseek-v3.2` bench runs failed
+before completing, so there is no end-to-end evidence about them either way;
+the small fixture eval suggests `gpt-5-mini` extracts more facts at higher
+cost, and nothing more. `text-embedding-3-small` is fine — a larger embedder
+did not help. See [`bench/RESULTS.md`](bench/RESULTS.md) for the full matrix.
 
 ## Public API
 
@@ -151,7 +156,11 @@ overturns ("lives in Munich") even when that fact is unlike the rest of the turn
 larger widens recall on stale facts at the cost of a longer prompt. It costs the
 extra LLM call (only when there are facts in scope to reconcile against) plus a
 cheap per-candidate retrieval, and a malformed/failed consolidation response
-safely falls back to an additive insert. See `PLAN-v2.md` §4.2.
+safely falls back to an additive insert. Conversation text is untrusted input
+that reaches this LLM call, so the write path caps the blast radius in code: at
+most one UPDATE/DELETE of an existing memory is applied per extracted candidate,
+which keeps a hostile or confused turn from rewriting or wiping the whole
+reconciliation window in a single `Add`. See `PLAN-v2.md` §4.2.
 
 ### Retrieval boosters: rerank + multi-query
 
@@ -170,8 +179,10 @@ m, _ := mneme.New(
 - **Rerank** (`WithReranker`): `Search` retrieves a wider pool (`DefaultRerankPoolN`,
   ~20) instead of just `k`, hands it to the `Reranker` to reorder by relevance,
   then keeps the leading `k`. The shipped `openai.LLMReranker` scores each
-  candidate with one LLM call and is parse-defensive — a malformed response
-  leaves the cosine order untouched. The `Reranker` interface is tiny, so a
+  candidate with one LLM call and is best-effort — a malformed response or a
+  failed LLM call leaves the cosine order untouched, so enabling it never makes
+  `Search` depend on the rerank model being up. It reorders only; `Fact.Score`
+  keeps the retrieval similarity. The `Reranker` interface is tiny, so a
   cross-encoder or hosted rerank API can drop in later.
 - **Multi-query** (`WithMultiQuery(n)`): one LLM call rewrites the query into up
   to `n` diverse phrasings; their hits are unioned (deduped by id, best score
@@ -204,10 +215,14 @@ k=3) — see [`eval/RESULTS.md`](./eval/RESULTS.md):
 The invariant — *every later prompt version must not regress the aggregate* — is
 enforced by the `-min-aggregate` gate, run by the
 [`Eval regression gate`](./.github/workflows/eval.yml) workflow (manual + weekly,
-needs the `OPENROUTER_API_KEY` repo secret). The gate is a regression *floor*
-(default `0.95`) rather than the exact baseline, since the live-LLM aggregate has
-run-to-run noise of roughly ±0.01 — loose enough not to flake, tight enough to
-catch a genuinely worse prompt.
+needs the `OPENROUTER_API_KEY` repo secret). The workflow pins the judge to a
+fixed model (`openai/gpt-4o-mini`) so the scoring oracle stays constant when the
+extraction default changes. The gate is a regression *floor* (default `0.95`)
+rather than the exact baseline: with 18 fixtures, one fixture swinging moves the
+aggregate by up to ~0.05, so the floor is set to tolerate a single noisy fixture
+while still tripping on a regression that touches several. Note the gate runs on
+demand and weekly, not on PRs — a prompt regression can merge and is caught by
+the next scheduled run.
 
 ## Continuous integration
 

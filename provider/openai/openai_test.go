@@ -3,12 +3,24 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+// fastRetries shrinks the backoff schedule so retry-loop tests run in
+// milliseconds instead of sleeping through the production delays.
+func fastRetries(t *testing.T) {
+	t.Helper()
+	prev := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	t.Cleanup(func() { retryBaseDelay = prev })
+}
 
 func TestLLMComplete(t *testing.T) {
 	var gotBody chatRequest
@@ -69,6 +81,7 @@ func TestLLMNoSystemMessage(t *testing.T) {
 }
 
 func TestLLMErrorStatus(t *testing.T) {
+	fastRetries(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		io.WriteString(w, `{"error":{"message":"rate limited"}}`)
@@ -78,6 +91,138 @@ func TestLLMErrorStatus(t *testing.T) {
 	_, err := l.Complete(context.Background(), "", "x", false)
 	if err == nil || !strings.Contains(err.Error(), "429") {
 		t.Errorf("expected 429 error, got %v", err)
+	}
+}
+
+func TestRetryExhausts429(t *testing.T) {
+	fastRetries(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	l := &LLM{BaseURL: srv.URL, Model: "m"}
+	_, err := l.Complete(context.Background(), "", "x", false)
+	if err == nil || !strings.Contains(err.Error(), "giving up after 5 attempts") {
+		t.Errorf("expected giving-up error, got %v", err)
+	}
+	if got := calls.Load(); got != 5 {
+		t.Errorf("429 should be retried maxAttempts times, got %d requests", got)
+	}
+}
+
+func TestRetryRecoversAfter5xx(t *testing.T) {
+	fastRetries(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	l := &LLM{BaseURL: srv.URL, Model: "m"}
+	got, err := l.Complete(context.Background(), "", "x", false)
+	if err != nil {
+		t.Fatalf("should recover after transient 5xx: %v", err)
+	}
+	if got != "ok" || calls.Load() != 3 {
+		t.Errorf("got %q after %d calls, want ok after 3", got, calls.Load())
+	}
+}
+
+func TestNoRetryOn400(t *testing.T) {
+	fastRetries(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"message":"bad prompt"}}`)
+	}))
+	defer srv.Close()
+	l := &LLM{BaseURL: srv.URL, Model: "m"}
+	if _, err := l.Complete(context.Background(), "", "x", false); err == nil {
+		t.Fatal("expected error on 400")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("a non-429 4xx must not be retried, got %d requests", got)
+	}
+}
+
+func TestRetryGarbled2xxBody(t *testing.T) {
+	fastRetries(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			io.WriteString(w, `not json at all`) // gateway hiccup: 200 + garbage
+			return
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	l := &LLM{BaseURL: srv.URL, Model: "m"}
+	got, err := l.Complete(context.Background(), "", "x", false)
+	if err != nil || got != "ok" {
+		t.Errorf("garbled 2xx body should be retried: got %q, %v", got, err)
+	}
+}
+
+func TestRetryContextCancelKeepsCause(t *testing.T) {
+	fastRetries(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		io.WriteString(w, "overloaded")
+	}))
+	defer srv.Close()
+	// Restore the real backoff for this test only, so cancellation reliably
+	// lands during the wait rather than racing the next request.
+	retryBaseDelay = 250 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond) // after the first 503, during backoff
+		cancel()
+	}()
+	// Cancellation during a backoff wait must produce an error carrying both
+	// the cancellation and the failure that caused the retrying.
+	l := &LLM{BaseURL: srv.URL, Model: "m"}
+	_, err := l.Complete(ctx, "", "x", false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error should wrap context.Canceled: %v", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("error should preserve the retry cause (503): %v", err)
+	}
+}
+
+func TestTemperatureRejectionRetriesWithout(t *testing.T) {
+	fastRetries(t)
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		if strings.Contains(string(body), "temperature") {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"message":"'temperature' is not supported with this model"}}`)
+			return
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	l := &LLM{BaseURL: srv.URL, Model: "o-mini"}
+	got, err := l.Complete(context.Background(), "", "x", false)
+	if err != nil {
+		t.Fatalf("should retry without temperature after a rejection: %v", err)
+	}
+	if got != "ok" {
+		t.Errorf("content = %q", got)
+	}
+	if len(bodies) != 2 || !strings.Contains(bodies[0], "temperature") || strings.Contains(bodies[1], "temperature") {
+		t.Errorf("expected temp then temp-free request, got %d bodies: %v", len(bodies), bodies)
 	}
 }
 
@@ -126,6 +271,18 @@ func TestEmbedderEmptyInput(t *testing.T) {
 	vecs, err := e.Embed(context.Background(), nil)
 	if err != nil || vecs != nil {
 		t.Errorf("empty input should no-op: vecs=%v err=%v", vecs, err)
+	}
+}
+
+func TestEmbedderRejectsEmptyVector(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[{"index":0,"embedding":[0.1]},{"index":1,"embedding":[]}]}`)
+	}))
+	defer srv.Close()
+	e := &Embedder{BaseURL: srv.URL, Model: "m"}
+	_, err := e.Embed(context.Background(), []string{"a", "b"})
+	if err == nil || !strings.Contains(err.Error(), "empty vector") {
+		t.Errorf("an empty embedding must be rejected, got %v", err)
 	}
 }
 

@@ -175,16 +175,17 @@ func TestLoadLoCoMo(t *testing.T) {
 	if s.Sessions[0].Messages[0].Name != "Caroline" {
 		t.Errorf("speaker not carried as Name: %q", s.Sessions[0].Messages[0].Name)
 	}
-	// Three questions; categories normalized; adversarial gold from
-	// adversarial_answer; numeric answer coerced to a string.
+	// Three questions; categories normalized; adversarial questions marked
+	// unanswerable with NO gold (the trap answer must never become gold);
+	// numeric answer coerced to a string.
 	if len(s.Questions) != 3 {
 		t.Fatalf("want 3 questions, got %d", len(s.Questions))
 	}
 	if s.Questions[0].Category != "single_hop" {
 		t.Errorf("q0 category = %q, want single_hop", s.Questions[0].Category)
 	}
-	if s.Questions[1].Category != "adversarial" || s.Questions[1].Answer != "Not mentioned." {
-		t.Errorf("q1 = %+v, want adversarial gold from adversarial_answer", s.Questions[1])
+	if q := s.Questions[1]; q.Category != "adversarial" || !q.Unanswerable || q.Answer != "" {
+		t.Errorf("q1 = %+v, want unanswerable adversarial with empty gold", q)
 	}
 	if s.Questions[2].Answer != "1" {
 		t.Errorf("numeric answer = %q, want \"1\"", s.Questions[2].Answer)

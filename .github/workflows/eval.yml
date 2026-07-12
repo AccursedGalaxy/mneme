@@ -13,7 +13,9 @@ name: Eval regression gate
 # change that materially degrades extraction. Tighten it via the manual input.
 #
 # Requires the repository secret OPENROUTER_API_KEY. The job no-ops (does not
-# fail) on forks / when the secret is absent, so it never blocks outside PRs.
+# fail) when the secret is absent (e.g. on forks). Note this gate runs on
+# demand and weekly only — it does NOT run on PRs, so a prompt regression can
+# merge and is only caught by the next scheduled run.
 
 on:
   workflow_dispatch:
@@ -61,7 +63,17 @@ jobs:
 
       - name: Run eval with regression gate
         if: steps.gate.outputs.run == 'true'
+        env:
+          # Workflow inputs are attacker-influenceable text; route them through
+          # env instead of expanding them into the script (shell injection with
+          # OPENROUTER_API_KEY in scope).
+          MIN_AGGREGATE: ${{ github.event.inputs.min_aggregate || '0.95' }}
         run: |
+          # -judge-model pins the scoring oracle to a fixed model. Without it
+          # the judge defaults to the extraction model under test, so the gated
+          # number would move whenever the default extraction model does —
+          # comparing against the recorded baseline would be meaningless.
           go run ./cmd/eval \
             -embedder openai \
-            -min-aggregate "${{ github.event.inputs.min_aggregate || '0.95' }}"
+            -judge-model openai/gpt-4o-mini \
+            -min-aggregate "$MIN_AGGREGATE"

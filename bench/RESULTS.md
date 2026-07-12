@@ -1,5 +1,18 @@
 # mneme bench results — locomo (full distribution)
 
+> **Erratum (2026-07-12, scoring fix — not yet re-run).** Every run below was
+> scored by a harness that graded the adversarial category (446 of 1986
+> questions) against LoCoMo's `adversarial_answer` — which is the *trap*
+> distractor, not a gold answer. The correct behavior for that category is
+> abstention, which is why every run shows adversarial ≈ 0.01–0.02: correctly
+> abstaining systems were scored 0. The harness now scores adversarial
+> questions as abstention checks. Consequences: (a) the absolute numbers below
+> understate performance and are not comparable to published LoCoMo results;
+> (b) the *relative* deltas between rows remain valid — every row carried the
+> same dead-weight category; (c) the "inferential-fact capture" reading of the
+> adversarial column below is wrong — it was a scoring artifact. Re-run the
+> matrix under the corrected harness before quoting absolute numbers.
+
 model: `google/gemini-2.5-flash-lite`  ·  dataset: `bench/data/locomo10.json`  ·  k: 5  ·  **full set, 1986 questions, no `-maxq`**
 
 Metrics: **EM** = normalized exact match, **F1** = token-overlap F1, **Judge** = LLM semantic match (the metric we steer on). This supersedes the earlier bounded gpt-4o-mini sample — it is the distribution-weighted v2 DoD baseline (PLAN-v2 §10). Per-run files live in `bench/results/`.
@@ -52,16 +65,16 @@ The matrix above pointed at extraction as the bottleneck. So we varied **only th
 
 Losers, usefully: **gpt-5-mini** is slower (reasoning tokens, hit the harness 2h ingest timeout), pricier, *and* worse on eval (precision 0.83 — over-extracts). **deepseek-v3.2** is below baseline on eval and failed mid-bench. Neither is worth pursuing.
 
-**Recommendation: use `gemini-2.5-flash` (or equivalent-tier) for extraction, not flash-lite.** ~5× the per-fact cost ($0.0017 vs $0.00034) for +0.07 Judge — easily worth it. `adversarial` stays at 0.02 even with flash → inferential-fact capture is a *separate, harder* problem (prompt/inference work, tk #11), not a model-tier problem.
+**Recommendation: use `gemini-2.5-flash` (or equivalent-tier) for extraction, not flash-lite.** ~5× the per-fact cost ($0.0017 vs $0.00034) for +0.07 Judge — easily worth it. ~~`adversarial` stays at 0.02 even with flash → inferential-fact capture is a *separate, harder* problem (prompt/inference work, tk #11), not a model-tier problem.~~ **Retracted (see erratum):** the flat 0.02 was the harness scoring correct abstentions as wrong; it says nothing about inferential-fact capture.
 
 ## Where the signal actually points
 
 Three independent retrieval-side levers — consolidation, a bigger embedder, and reranking — are all flat-or-negative. That triangulates the bottleneck **upstream of retrieval: facts that answer the question are never extracted in the first place**, so no amount of better ranking surfaces them.
 
-- The **adversarial category (446 Q = 22%, stuck at ~0.02 everywhere)** is *not* abstention — its golds are real, short, **inferential** answers ("self-care is important", "researching adoption agencies", "purple"). These are realizations/causes/attributes the additive extractor doesn't capture. This matches the prior single-hop diagnostic (tk task 7/11): answer facts like "realized self-care matters" were *never written to the store*.
+- ~~The **adversarial category (446 Q = 22%, stuck at ~0.02 everywhere)** is *not* abstention — its golds are real, short, **inferential** answers ("self-care is important", "researching adoption agencies", "purple"). These are realizations/causes/attributes the additive extractor doesn't capture.~~ **Retracted (see erratum):** those "golds" were the `adversarial_answer` trap field, which the loader wrongly fell back to; per the LoCoMo protocol the category is unanswerable and the correct behavior is abstention. The flat ~0.02 measured the harness bug, not extraction. The single-hop diagnostic (tk task 7/11) still stands on its own evidence.
 - **single-hop (0.36)** is the ceiling category and still leaves most questions unanswered — again an extraction/answer-specificity gap, not a ranking gap.
 
-**Next lever (highest expected value): extraction recall on implied/causal/inferential facts** (tk task 11) — tighten the extraction prompt to capture realizations, causes, origins, and attributes, then re-run this matrix. Answer-prompt specificity tuning (task 8) is the cheap secondary.
+**Next lever: re-run this matrix under the corrected adversarial scoring** to get a trustworthy baseline, then extraction recall on implied/causal facts (tk task 11) and answer-prompt specificity tuning (task 8).
 
 ## Reproduce
 

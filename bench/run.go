@@ -210,17 +210,31 @@ func scoreQuestion(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM
 	if err != nil {
 		return QAResult{}, err
 	}
-	return QAResult{
+	res := QAResult{
 		SampleID:  sampleID,
 		Question:  q.Question,
 		Gold:      q.Answer,
 		Predicted: pred,
 		Category:  q.Category,
 		Retrieved: factTexts(facts),
-		EM:        exactMatch(pred, q.Answer),
-		F1:        f1(pred, q.Answer),
-		Judge:     judge.Same(ctx, pred, q.Answer),
-	}, nil
+	}
+	if q.Unanswerable {
+		// The gold behavior is abstention: all three metrics collapse to
+		// "did the system decline to answer". No judge call — a semantic
+		// match against an empty gold is meaningless.
+		res.Gold = "(unanswerable — correct behavior is to abstain)"
+		ok := abstained(pred)
+		res.EM = ok
+		res.Judge = ok
+		if ok {
+			res.F1 = 1
+		}
+		return res, nil
+	}
+	res.EM = exactMatch(pred, q.Answer)
+	res.F1 = f1(pred, q.Answer)
+	res.Judge = judge.Same(ctx, pred, q.Answer)
+	return res, nil
 }
 
 // factTexts pulls the fact statements from search hits, for the -v diagnostic

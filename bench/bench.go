@@ -45,10 +45,17 @@ type Session struct {
 // QAPair is one question with its gold answer and benchmark category. Category
 // is the normalized label (e.g. "single_hop", "temporal") used for the
 // per-category aggregation that tells us which lever to pull next.
+//
+// Unanswerable marks a question whose correct behavior is abstention (LoCoMo's
+// adversarial category): Answer is empty and the system scores 1 only when it
+// declines to answer. Its distractor answer is never used as gold — scoring
+// against it would invert the metric, rewarding the hallucination the category
+// exists to catch.
 type QAPair struct {
-	Question string
-	Answer   string
-	Category string
+	Question     string
+	Answer       string
+	Category     string
+	Unanswerable bool
 }
 
 // flexString unmarshals a JSON value that may be a string, number, or boolean
@@ -152,16 +159,22 @@ func LoadLoCoMo(path string) ([]Sample, error) {
 			if strings.TrimSpace(q.Question) == "" {
 				continue
 			}
-			// Adversarial questions (category 5) carry the gold under
-			// adversarial_answer; everything else under answer.
+			// Adversarial questions (category 5) are unanswerable by design:
+			// their gold behavior is abstention, and adversarial_answer is the
+			// trap (text present in the conversation but misattributed by the
+			// question) — it is deliberately NOT used as a gold answer. A
+			// non-adversarial question with no gold answer cannot be scored at
+			// all and is dropped.
+			adversarial := q.Category == 5
 			gold := string(q.Answer)
-			if gold == "" {
-				gold = string(q.AdversarialAnswer)
+			if !adversarial && gold == "" {
+				continue
 			}
 			questions = append(questions, QAPair{
-				Question: q.Question,
-				Answer:   gold,
-				Category: locomoCategory(q.Category),
+				Question:     q.Question,
+				Answer:       gold,
+				Category:     locomoCategory(q.Category),
+				Unanswerable: adversarial,
 			})
 		}
 

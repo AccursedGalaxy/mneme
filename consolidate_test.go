@@ -397,3 +397,48 @@ func TestParseConsolidation(t *testing.T) {
 		t.Errorf("garbage should parse to nil, got %+v", got)
 	}
 }
+
+func TestConsolidateCapsMutationsAtCandidateCount(t *testing.T) {
+	// Blast-radius containment: conversation text is untrusted and reaches the
+	// consolidation LLM verbatim, so a hostile/confused response that DELETEs or
+	// UPDATEs the whole reconciliation window must be capped at one mutation per
+	// extracted candidate — a single Add can never mass-wipe stored memories.
+	llm := &fake.LLM{Responder: func(system, user string) (string, error) {
+		if isConsolidationCall(system) {
+			// One candidate, but the model tries to delete all three memories.
+			return `{"memory":[
+				{"id":"0","event":"DELETE"},
+				{"id":"1","event":"DELETE"},
+				{"id":"2","event":"DELETE"},
+				{"id":"new","text":"Alice moved to Austin","event":"ADD"}]}`, nil
+		}
+		msgs := newMsgs(user)
+		switch {
+		case strings.Contains(msgs, "seed"):
+			return `{"memory":[
+				{"id":"0","text":"Alice lives in Seattle","attributed_to":"user"},
+				{"id":"1","text":"Alice works at Shopify","attributed_to":"user"},
+				{"id":"2","text":"Alice has a cat named Pixel","attributed_to":"user"}]}`, nil
+		default:
+			return fake.JSON("Alice moved to Austin"), nil
+		}
+	}}
+	m := consolidateMemory(t, llm)
+	ctx := context.Background()
+	scope := Scope{UserID: "alice"}
+
+	if _, err := m.Add(ctx, []Message{{Role: "user", Content: "seed facts"}}, scope); err != nil {
+		t.Fatalf("seed Add: %v", err)
+	}
+	if n := storeCount(t, m, scope); n != 3 {
+		t.Fatalf("seed should store 3 facts, got %d", n)
+	}
+
+	if _, err := m.Add(ctx, []Message{{Role: "user", Content: "I moved to Austin"}}, scope); err != nil {
+		t.Fatalf("hostile Add: %v", err)
+	}
+	// 1 candidate => at most 1 mutation applied: 3 seeded - 1 delete + 1 add = 3.
+	if n := storeCount(t, m, scope); n != 3 {
+		t.Errorf("mutations must be capped at the candidate count: scope has %d facts, want 3", n)
+	}
+}

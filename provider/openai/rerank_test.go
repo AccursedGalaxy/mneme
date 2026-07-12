@@ -38,8 +38,10 @@ func TestLLMRerankerReorders(t *testing.T) {
 	if order(got) != "cba" {
 		t.Errorf("reorder by relevance: got %s want cba", order(got))
 	}
-	if got[0].Score != 0.9 {
-		t.Errorf("Score should carry the relevance score, got %v", got[0].Score)
+	// Fact.Score is a public field documented as the retrieval similarity;
+	// reranking reorders but must never overwrite it with model-internal values.
+	if got[0].Score != 0.1 { // candidate c's original cosine score
+		t.Errorf("Score must keep the retrieval similarity (0.1), got %v", got[0].Score)
 	}
 }
 
@@ -95,11 +97,43 @@ func TestLLMRerankerSingleCandidateSkipsCall(t *testing.T) {
 	}
 }
 
-func TestLLMRerankerTransportErrorPropagates(t *testing.T) {
+func TestLLMRerankerTransportErrorDegradesToCosineOrder(t *testing.T) {
+	// Reranking is a best-effort booster: a failed LLM call must not fail the
+	// caller's Search, it degrades to the incoming cosine order.
 	llm := &fake.LLM{Responder: func(string, string) (string, error) { return "", errors.New("503") }}
 	r := &LLMReranker{LLM: llm}
-	if _, err := r.Rerank(context.Background(), "q", cands("a", "b")); err == nil {
-		t.Fatal("transport error from the LLM should propagate")
+	got, err := r.Rerank(context.Background(), "q", cands("a", "b"))
+	if err != nil {
+		t.Fatalf("LLM failure must not propagate out of Rerank: %v", err)
+	}
+	if order(got) != "ab" {
+		t.Errorf("LLM failure must preserve cosine order: got %s", order(got))
+	}
+}
+
+func TestLLMRerankerUnscoredKeepOriginalScores(t *testing.T) {
+	// A partial response must not leak sentinel values into unscored
+	// candidates' public Score field.
+	llm := &fake.LLM{Default: `{"scores":[{"id":1,"score":0.9}]}`}
+	r := &LLMReranker{LLM: llm}
+	in := cands("a", "b", "c")
+	got, err := r.Rerank(context.Background(), "q", in)
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	for _, f := range got {
+		if f.Score < 0 {
+			t.Errorf("candidate %s has corrupted Score %v", f.ID, f.Score)
+		}
+	}
+}
+
+func TestScoreMapRejectsSchemalessDecode(t *testing.T) {
+	// A wrong-schema array (unknown fields ignored -> all-zero items) must be
+	// treated as a parse failure, not as "everything scored 0".
+	got := parseRerankScores(`[{"index":2,"relevance":0.9},{"index":0,"relevance":0.1}]`)
+	if got != nil {
+		t.Errorf("schema-mismatched response should yield nil scores, got %v", got)
 	}
 }
 

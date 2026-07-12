@@ -179,3 +179,4 @@ exit status 1
 running locomo: 10 samples, 1986 questions, model=deepseek/deepseek-v3.2, embedder=openai, k=5, strategy=additive
   scored 1/10 samples  scored 2/10 samples  scored 3/10 samples  scored 4/10 samples  scored 5/10 samples    bench deepseek/deepseek-v3.2 FAILED (continuing)
 === [02:25:02] EXTRACTION_AB COMPLETE ===
+  scored 6/10 samples  scored 7/10 samplesbench: sample "conv-48": ingest session 7: extraction LLM call: context deadline exceeded

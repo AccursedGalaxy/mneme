@@ -48,28 +48,26 @@ jobs:
         run: go test -race -count=1 ./...
 
       # --- extract this version's notes from CHANGELOG.md ---
+      # The notes are written to a file and passed via --notes-file, never
+      # expanded into the shell: changelog content is repo-controlled but still
+      # arbitrary text, and inlining it into a run script would let a crafted
+      # entry execute in a job holding a contents:write token.
       - name: Extract release notes
-        id: notes
         run: |
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}" # strip leading v: v0.2.0 -> 0.2.0
           # Print the body between "## [<version>]" and the next "## [" heading.
           # Capture lines after "## [<version>]" up to the next version heading
           # or the trailing link-reference block ("[x]: https://...").
-          notes="$(awk -v ver="$version" '
+          awk -v ver="$version" '
             $0 ~ "^## \\[" ver "\\]" { capture=1; next }
             capture && (/^## \[/ || /^\[[^][]+\]:[[:space:]]/) { exit }
             capture { print }
-          ' CHANGELOG.md)"
-          if [ -z "$(printf "%s" "$notes" | tr -d '[:space:]')" ]; then
+          ' CHANGELOG.md > /tmp/release_notes.md
+          if [ -z "$(tr -d '[:space:]' < /tmp/release_notes.md)" ]; then
             echo "::warning::No CHANGELOG.md section found for $version; falling back to a generic note."
-            notes="Release $tag. See CHANGELOG.md for details."
+            printf 'Release %s. See CHANGELOG.md for details.\n' "$tag" > /tmp/release_notes.md
           fi
-          {
-            echo 'body<<RELEASE_NOTES_EOF'
-            printf '%s\n' "$notes"
-            echo 'RELEASE_NOTES_EOF'
-          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub release
         env:
@@ -82,6 +80,6 @@ jobs:
           esac
           gh release create "$tag" \
             --title "$tag" \
-            --notes "${{ steps.notes.outputs.body }}" \
+            --notes-file /tmp/release_notes.md \
             --verify-tag \
             $prerelease

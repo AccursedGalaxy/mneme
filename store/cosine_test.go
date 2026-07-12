@@ -28,3 +28,13 @@ func TestCosine(t *testing.T) {
 		})
 	}
 }
+
+func TestCosineNaNCollapsesToZero(t *testing.T) {
+	nan := float32(math.NaN())
+	if got := Cosine([]float32{nan, 1}, []float32{1, 1}); got != 0 {
+		t.Errorf("NaN component must yield 0, got %v", got)
+	}
+	if got := Cosine([]float32{1, 1}, []float32{nan, nan}); got != 0 {
+		t.Errorf("NaN vector must yield 0, got %v", got)
+	}
+}

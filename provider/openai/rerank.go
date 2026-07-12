@@ -21,9 +21,10 @@ import (
 // providers, and a cross-encoder or hosted rerank API can implement the same
 // mneme.Reranker interface elsewhere later.
 //
-// It is defensive: a malformed or empty model response leaves the candidate
-// order unchanged rather than erroring (matching mneme's parse-defensively
-// philosophy). Only a transport-level failure from the LLM propagates.
+// It is best-effort by design, like mneme's other boosters: a malformed or
+// empty model response — and a failed LLM call — leaves the candidate order
+// unchanged rather than erroring, so enabling reranking never makes Search
+// availability depend on the rerank model being up.
 type LLMReranker struct {
 	// LLM scores the candidates. Reuse the same client as extraction, or point
 	// it at a cheaper/faster model dedicated to reranking.
@@ -31,15 +32,20 @@ type LLMReranker struct {
 }
 
 // Rerank scores each candidate against the query and returns them ordered most
-// relevant first, with Fact.Score replaced by the relevance score. Candidates
-// the model omits keep their incoming (cosine) order behind the scored ones.
+// relevant first. The model's relevance scores determine position only —
+// Fact.Score is left untouched (it remains the retrieval similarity Search
+// populated), so callers never see rerank-internal values in a public field.
+// Candidates the model omits keep their incoming (cosine) order behind the
+// scored ones.
 func (r *LLMReranker) Rerank(ctx context.Context, query string, candidates []types.Fact) ([]types.Fact, error) {
 	if len(candidates) <= 1 {
 		return candidates, nil
 	}
 	raw, err := r.LLM.Complete(ctx, rerankSystemPrompt, buildRerankUser(query, candidates), true)
 	if err != nil {
-		return nil, err
+		// Best-effort: a rerank that cannot run degrades to the cosine order
+		// instead of failing the caller's Search.
+		return candidates, nil
 	}
 	scores := parseRerankScores(raw)
 	if len(scores) == 0 {
@@ -48,19 +54,32 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, candidates []typ
 		return candidates, nil
 	}
 
-	// Stable sort by relevance desc; a missing score sorts last while keeping
-	// the candidates' incoming relative order (stable + sentinel below cosine).
+	// Order by relevance desc without mutating the facts: scored candidates
+	// first (higher relevance wins), unscored ones after in their incoming
+	// relative order (stable sort).
 	out := make([]types.Fact, len(candidates))
 	copy(out, candidates)
-	for i := range out {
-		if s, ok := scores[i]; ok {
-			out[i].Score = s
-		} else {
-			out[i].Score = -1
-		}
+	relevance := func(i int) (float32, bool) {
+		s, ok := scores[i]
+		return s, ok
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-	return out, nil
+	idx := make([]int, len(out))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		sa, oka := relevance(idx[a])
+		sb, okb := relevance(idx[b])
+		if oka != okb {
+			return oka // scored candidates come first
+		}
+		return sa > sb
+	})
+	ordered := make([]types.Fact, len(out))
+	for i, j := range idx {
+		ordered[i] = out[j]
+	}
+	return ordered, nil
 }
 
 const rerankSystemPrompt = `You score how relevant each candidate memory is to a search query, so the most useful ones can be surfaced first.
@@ -127,6 +146,20 @@ func tryRerankEnvelope(s string) (map[int]float32, bool) {
 }
 
 func scoreMap(items []rerankScore) map[int]float32 {
+	// A wrong-schema response can decode "successfully" with every field
+	// ignored (unknown JSON keys are dropped), yielding all-zero items. Treat
+	// a multi-item batch that carries no signal at all as a parse failure so
+	// Rerank preserves the cosine order instead of collapsing on it.
+	signal := false
+	for _, it := range items {
+		if it.ID != 0 || it.Score != 0 {
+			signal = true
+			break
+		}
+	}
+	if !signal && len(items) > 1 {
+		return nil
+	}
 	out := make(map[int]float32, len(items))
 	for _, it := range items {
 		out[int(it.ID)] = it.Score

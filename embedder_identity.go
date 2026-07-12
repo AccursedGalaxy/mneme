@@ -36,9 +36,9 @@ func describeEmbedder(info store.EmbedderInfo) string {
 	return fmt.Sprintf("%s (dim %d)", model, info.Dim)
 }
 
-// vecLen returns the dimension of the first vector in a batch, or 0 if the batch
-// is empty. The store rejects zero-length embeddings, so a non-empty batch has a
-// positive length.
+// vecLen returns the dimension of the first vector in a batch, or 0 if the
+// batch is empty. Callers run validateVecs (pipeline.go) on the batch first, so
+// a non-empty batch is guaranteed uniform and positive-length here.
 func vecLen(vecs [][]float32) int {
 	if len(vecs) == 0 {
 		return 0

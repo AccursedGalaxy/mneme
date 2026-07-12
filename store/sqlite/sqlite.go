@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/AccursedGalaxy/mneme/store"
 	"github.com/AccursedGalaxy/mneme/types"
@@ -53,9 +54,20 @@ const (
 // Store is a SQLite-backed store.Store.
 type Store struct {
 	db *sql.DB
+	// anchor pins one connection open for the store's lifetime when the
+	// database is in-memory. Without it, database/sql may discard the pool's
+	// connection (bad-conn error, context cancelled mid-query) and dial a
+	// replacement — and for an in-memory database a replacement connection is a
+	// brand-new empty database: total silent data loss. The anchor plus
+	// cache=shared keeps the database alive across pool churn.
+	anchor *sql.Conn
 }
 
 var _ store.Store = (*Store)(nil)
+
+// memSeq disambiguates concurrent ":memory:" opens: each Open must get its own
+// private database, so each gets a distinct shared-cache name.
+var memSeq atomic.Uint64
 
 // Open opens (creating if needed) a SQLite database at path and ensures the
 // schema exists. Use ":memory:" for an ephemeral store. The returned *Store is
@@ -64,23 +76,43 @@ var _ store.Store = (*Store)(nil)
 // File-backed databases run in WAL mode (PRAGMA journal_mode=WAL) so reads run
 // concurrently with a single writer — the read-heavy access pattern of an agent
 // hitting memory every turn. busy_timeout lets a contended writer wait rather
-// than fail immediately with "database is locked". An in-memory database stays
-// pinned to a single connection: each connection to ":memory:" is its own
-// private database, so a pool would hand out separate empty stores.
+// than fail immediately with "database is locked".
+//
+// ":memory:" is rewritten to a uniquely-named shared-cache in-memory database
+// and one connection is held open for the store's lifetime, so the data
+// survives connection-pool churn (see Store.anchor). A caller-supplied
+// pre-formatted in-memory DSN (a "file:...mode=memory" string) is passed
+// through unchanged and pinned to a single pooled connection instead — note
+// that such a store does NOT survive that connection being discarded (e.g.
+// after a context cancelled mid-query); prefer plain ":memory:".
 func Open(path string) (*Store, error) {
 	mem := isMemoryPath(path)
+	private := path == ":memory:"
+	if private {
+		// A unique shared-cache name gives this Open its own database that all
+		// pool connections see, instead of one private database per connection.
+		path = fmt.Sprintf("file:mneme-mem-%d?mode=memory&cache=shared", memSeq.Add(1))
+	}
 	db, err := sql.Open("sqlite", dsn(path, mem))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
-	if mem {
+	s := &Store{db: db}
+	if private {
+		conn, err := db.Conn(context.Background())
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("pin in-memory connection: %w", err)
+		}
+		s.anchor = conn
+	} else if mem {
 		db.SetMaxOpenConns(1)
 	}
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		s.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	return s, nil
 }
 
 // isMemoryPath reports whether path names an in-memory database, which SQLite
@@ -102,9 +134,24 @@ func dsn(path string, mem bool) string {
 	return "file:" + path + "?" + q.Encode()
 }
 
+// Insert persists a batch of records in one transaction. A record whose
+// (scope, hash) already exists is silently skipped: the guard runs inside the
+// write transaction, so two concurrent Adds that both extracted the same fact
+// cannot both insert it — the pipeline's read-then-dedup pass is advisory and
+// this is the authoritative backstop. (An Update writing a duplicate hash is
+// deliberately NOT constrained — overwriting a fact in place is consolidation's
+// documented behavior even when the new text matches another fact.)
+//
+// A zero-length embedding is rejected: it would be stored but score 0 against
+// every query — a fact that silently never surfaces — so it fails loudly here.
 func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
 	if len(recs) == 0 {
 		return nil
+	}
+	for _, r := range recs {
+		if len(r.Embedding) == 0 {
+			return fmt.Errorf("insert %s: zero-length embedding", r.ID)
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -113,7 +160,9 @@ func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO facts
 		(id, text, hash, embedding, user_id, agent_id, run_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (SELECT 1 FROM facts
+			WHERE user_id = ? AND agent_id = ? AND run_id = ? AND hash = ?)`)
 	if err != nil {
 		return err
 	}
@@ -123,6 +172,7 @@ func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
 			r.ID, r.Text, r.Hash, encodeVec(r.Embedding),
 			r.Scope.UserID, r.Scope.AgentID, r.Scope.RunID,
 			r.CreatedAt.UTC().Format(timeLayout),
+			r.Scope.UserID, r.Scope.AgentID, r.Scope.RunID, r.Hash,
 		)
 		if err != nil {
 			return fmt.Errorf("insert %s: %w", r.ID, err)
@@ -281,7 +331,12 @@ func (s *Store) SetEmbedderMeta(ctx context.Context, info store.EmbedderInfo) er
 	return tx.Commit()
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s.anchor != nil {
+		s.anchor.Close() // releases the pinned in-memory connection
+	}
+	return s.db.Close()
+}
 
 const timeLayout = "2006-01-02T15:04:05.999999999Z07:00" // RFC3339Nano
 
@@ -300,7 +355,11 @@ func scanRecord(sc scanner) (types.Record, error) {
 		&rec.Scope.UserID, &rec.Scope.AgentID, &rec.Scope.RunID, &created); err != nil {
 		return types.Record{}, err
 	}
-	rec.Embedding = decodeVec(blob)
+	vec, err := decodeVec(blob)
+	if err != nil {
+		return types.Record{}, fmt.Errorf("record %s: %w", rec.ID, err)
+	}
+	rec.Embedding = vec
 	t, err := parseTime(created)
 	if err != nil {
 		return types.Record{}, fmt.Errorf("parse created_at %q: %w", created, err)
@@ -317,10 +376,16 @@ func encodeVec(v []float32) []byte {
 	return b
 }
 
-func decodeVec(b []byte) []float32 {
+// decodeVec is the inverse of encodeVec. A blob whose length is not a multiple
+// of 4 is corrupt (truncated or foreign data) and surfaces as an error rather
+// than silently decoding to a shorter vector that scores 0 forever.
+func decodeVec(b []byte) ([]float32, error) {
+	if len(b)%4 != 0 {
+		return nil, fmt.Errorf("corrupt embedding blob: %d bytes is not a multiple of 4", len(b))
+	}
 	v := make([]float32, len(b)/4)
 	for i := range v {
 		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
 	}
-	return v
+	return v, nil
 }

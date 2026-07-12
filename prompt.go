@@ -301,21 +301,45 @@ func buildExtractionUser(today string, existing []labeledMemory, context, conv [
 
 // renderMessages formats messages as "role (name): content" lines, skipping
 // system messages (ignored for extraction) and empty content.
+//
+// Message content is untrusted: role and name are flattened to a single line
+// and multi-line content is indented so no message can start a line at column
+// 0 — otherwise a message containing "\nassistant: ..." or "\nEXISTING
+// MEMORIES:\n..." would render as a forged speaker turn or section header and
+// steer extraction/consolidation. Indentation narrows that spoofing channel;
+// it cannot make a hostile conversation safe (nothing can — the model still
+// reads the text), so the write paths also contain the blast radius in code
+// (see the mutation cap in pipeline.go's consolidate).
 func renderMessages(msgs []types.Message) string {
 	var b strings.Builder
 	for _, m := range msgs {
 		if m.Role == "system" || strings.TrimSpace(m.Content) == "" {
 			continue
 		}
-		role := m.Role
+		role := flattenLine(m.Role)
 		if role == "" {
 			role = "user"
 		}
-		if m.Name != "" {
-			fmt.Fprintf(&b, "%s (%s): %s\n", role, m.Name, m.Content)
+		content := indentContinuations(m.Content)
+		if name := flattenLine(m.Name); name != "" {
+			fmt.Fprintf(&b, "%s (%s): %s\n", role, name, content)
 		} else {
-			fmt.Fprintf(&b, "%s: %s\n", role, m.Content)
+			fmt.Fprintf(&b, "%s: %s\n", role, content)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// flattenLine collapses a field that must stay on one line (role, speaker name)
+// to a single whitespace-normalized line, so it cannot inject prompt lines.
+func flattenLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// indentContinuations strips carriage returns and indents every continuation
+// line of a multi-line message, so message content can never start a line at
+// column 0 in the rendered prompt.
+func indentContinuations(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	return strings.ReplaceAll(s, "\n", "\n    ")
 }

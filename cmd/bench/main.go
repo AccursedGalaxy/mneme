@@ -57,7 +57,7 @@ func run() error {
 		concur    = flag.Int("concurrency", 8, "questions scored in parallel per sample (ingestion stays sequential); 1 = serial")
 		limit     = flag.Int("limit", 0, "if >0, run only the first N samples (smoke test)")
 		maxQ      = flag.Int("maxq", 0, "if >0, cap questions per sample (smoke/cost control)")
-		out       = flag.String("out", "bench/RESULTS.md", "results file to write (markdown); empty to skip")
+		out       = flag.String("out", "", "results file to write (markdown), e.g. bench/results/<run>.md; empty prints to stdout only. Never point this at bench/RESULTS.md — that file is the hand-curated analysis, not a raw run dump")
 		verbose   = flag.Bool("v", false, "print each question's gold/predicted answer")
 	)
 	flag.Parse()
@@ -164,17 +164,31 @@ func run() error {
 		printAnswers(report)
 	}
 
+	// Record the effective answer/judge models: when the flags are empty they
+	// default to the extraction model, and the result file must say which
+	// models actually scored the run or the numbers are not reproducible.
+	answerLabel := *answerMdl
+	if answerLabel == "" {
+		answerLabel = *model
+	}
+	judgeLabel := *judgeMdl
+	if judgeLabel == "" {
+		judgeLabel = *model
+	}
+
 	md := render(report, runMeta{
-		dataset:  *dataset,
-		path:     *path,
-		model:    *model,
-		embedder: embedLabel,
-		limit:    *limit,
-		maxQ:     *maxQ,
-		samples:  len(samples),
-		cprompt:  *cprompt,
-		rerank:   *rerank,
-		multiQ:   *multiQ,
+		dataset:     *dataset,
+		path:        *path,
+		model:       *model,
+		answerModel: answerLabel,
+		judgeModel:  judgeLabel,
+		embedder:    embedLabel,
+		limit:       *limit,
+		maxQ:        *maxQ,
+		samples:     len(samples),
+		cprompt:     *cprompt,
+		rerank:      *rerank,
+		multiQ:      *multiQ,
 	})
 	fmt.Print(md)
 
@@ -240,6 +254,7 @@ func loadDataset(dataset, path string) ([]bench.Sample, error) {
 // and the honesty caveats for bounded runs.
 type runMeta struct {
 	dataset, path, model, embedder string
+	answerModel, judgeModel        string // effective models (fall back to model)
 	limit, maxQ, samples           int
 	cprompt                        string // consolidation prompt version, if set
 	rerank                         bool   // rerank pass active in Search
@@ -253,8 +268,8 @@ type runMeta struct {
 func render(report bench.Report, m runMeta) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# mneme bench results — %s\n\n", m.dataset)
-	fmt.Fprintf(&b, "dataset: `%s`  ·  model: `%s`  ·  embedder: `%s`  ·  k: %d  ·  strategy: `%s`",
-		m.path, m.model, m.embedder, report.K, report.Strategy)
+	fmt.Fprintf(&b, "dataset: `%s`  ·  model: `%s`  ·  answer: `%s`  ·  judge: `%s`  ·  embedder: `%s`  ·  k: %d  ·  strategy: `%s`",
+		m.path, m.model, m.answerModel, m.judgeModel, m.embedder, report.K, report.Strategy)
 	if m.cprompt != "" {
 		fmt.Fprintf(&b, "  ·  cprompt: `%s`", m.cprompt)
 	}
@@ -289,8 +304,12 @@ func render(report bench.Report, m runMeta) string {
 	o := report.Overall()
 	fmt.Fprintf(&b, "| **overall** | **%d** | **%.2f** | **%.2f** | **%.2f** |\n", o.N, o.EM, o.F1, o.Judge)
 
-	fmt.Fprintf(&b, "\n## Reproduce\n\n```sh\ngo run ./cmd/bench -dataset %s -path %s -k %d -strategy %s",
-		m.dataset, m.path, report.K, report.Strategy)
+	// The reproduce command pins everything that shaped the numbers — the
+	// extraction model AND the answer/judge oracles plus the embedding model.
+	// Omitting any of them would make "reproduce" rerun under whatever the
+	// defaults are that day, silently producing different numbers.
+	fmt.Fprintf(&b, "\n## Reproduce\n\n```sh\nMNEME_EMBED_MODEL=%s go run ./cmd/bench -dataset %s -path %s -k %d -strategy %s \\\n  -model %s -answer-model %s -judge-model %s",
+		m.embedder, m.dataset, m.path, report.K, report.Strategy, m.model, m.answerModel, m.judgeModel)
 	if m.cprompt != "" {
 		fmt.Fprintf(&b, " -cprompt %s", m.cprompt)
 	}

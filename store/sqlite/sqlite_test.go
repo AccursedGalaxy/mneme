@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -358,5 +359,153 @@ func TestEmbedderMetaRoundTrip(t *testing.T) {
 	}
 	if got != next {
 		t.Errorf("EmbedderMeta = %+v, want %+v", got, next)
+	}
+}
+
+func TestInsertBackstopsConcurrentHashRace(t *testing.T) {
+	// The pipeline's read-then-dedup is advisory; the store is the
+	// authoritative backstop. Two batches carrying the same (scope, hash) —
+	// what two racing Adds produce — must yield exactly one row.
+	s := newStore(t)
+	ctx := context.Background()
+	scope := types.Scope{UserID: "u"}
+	rec := func(id string) types.Record {
+		return types.Record{
+			ID: id, Text: "same fact", Hash: "h1",
+			Embedding: []float32{1, 2}, Scope: scope, CreatedAt: time.Now(),
+		}
+	}
+	if err := s.Insert(ctx, []types.Record{rec("id-a")}); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if err := s.Insert(ctx, []types.Record{rec("id-b")}); err != nil {
+		t.Fatalf("duplicate insert must be a silent no-op, got %v", err)
+	}
+	hits, err := s.Search(ctx, scope, []float32{1, 2}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Errorf("duplicate (scope, hash) must not create a second row: got %d rows", len(hits))
+	}
+	// A different scope with the same hash is a different fact-space and must insert.
+	other := rec("id-c")
+	other.Scope = types.Scope{UserID: "v"}
+	if err := s.Insert(ctx, []types.Record{other}); err != nil {
+		t.Fatalf("same hash in another scope: %v", err)
+	}
+	hits, err = s.Search(ctx, other.Scope, []float32{1, 2}, 10)
+	if err != nil || len(hits) != 1 {
+		t.Errorf("other scope should hold its own copy: %d rows, err=%v", len(hits), err)
+	}
+}
+
+func TestInsertRejectsEmptyEmbedding(t *testing.T) {
+	s := newStore(t)
+	err := s.Insert(context.Background(), []types.Record{{
+		ID: "x", Text: "t", Hash: "h", Scope: types.Scope{}, CreatedAt: time.Now(),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "zero-length embedding") {
+		t.Errorf("zero-length embedding must be rejected, got %v", err)
+	}
+}
+
+func TestUpdateMayDuplicateHash(t *testing.T) {
+	// Consolidation's documented contract: an UPDATE overwrites in place even
+	// when its new text (hash) matches another stored fact. The insert-time
+	// dedup backstop must not constrain updates.
+	s := newStore(t)
+	ctx := context.Background()
+	scope := types.Scope{UserID: "u"}
+	recs := []types.Record{
+		{ID: "a", Text: "fact one", Hash: "h-one", Embedding: []float32{1}, Scope: scope, CreatedAt: time.Now()},
+		{ID: "b", Text: "fact two", Hash: "h-two", Embedding: []float32{1}, Scope: scope, CreatedAt: time.Now()},
+	}
+	if err := s.Insert(ctx, recs); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.Update(ctx, types.Record{ID: "b", Text: "fact one", Hash: "h-one", Embedding: []float32{1}})
+	if err != nil || !ok {
+		t.Fatalf("update to a duplicate hash must succeed: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestMemoryStoreSurvivesConnectionChurn(t *testing.T) {
+	// Every pool connection must see the same in-memory database, and the data
+	// must survive the pool discarding and re-dialing connections — the failure
+	// mode where a context cancelled mid-query silently wiped a ":memory:"
+	// store.
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	scope := types.Scope{UserID: "u"}
+	if err := s.Insert(ctx, []types.Record{{
+		ID: "a", Text: "keep me", Hash: "h", Embedding: []float32{1}, Scope: scope, CreatedAt: time.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force pool churn: forbid idle connections so each query dials a fresh
+	// one, then query several times. Pre-fix, each fresh connection was a new
+	// empty database.
+	s.db.SetMaxIdleConns(0)
+	for i := 0; i < 3; i++ {
+		hits, err := s.Search(ctx, scope, []float32{1}, 10)
+		if err != nil {
+			t.Fatalf("search %d: %v", i, err)
+		}
+		if len(hits) != 1 {
+			t.Fatalf("in-memory data lost after connection churn (query %d): %d rows", i, len(hits))
+		}
+	}
+}
+
+func TestMemoryStoresAreIsolated(t *testing.T) {
+	// Two ":memory:" opens must be two separate databases.
+	a, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	ctx := context.Background()
+	scope := types.Scope{UserID: "u"}
+	if err := a.Insert(ctx, []types.Record{{
+		ID: "a", Text: "in store a", Hash: "h", Embedding: []float32{1}, Scope: scope, CreatedAt: time.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := b.Search(ctx, scope, []float32{1}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("store b sees store a's rows: %d", len(hits))
+	}
+}
+
+func TestCorruptEmbeddingBlobSurfacesError(t *testing.T) {
+	// A blob whose length is not a multiple of 4 is corrupt; reads must error
+	// loudly instead of silently decoding a truncated vector that scores 0.
+	s := newStore(t)
+	ctx := context.Background()
+	scope := types.Scope{UserID: "u"}
+	if err := s.Insert(ctx, []types.Record{{
+		ID: "a", Text: "t", Hash: "h", Embedding: []float32{1}, Scope: scope, CreatedAt: time.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE facts SET embedding = ? WHERE id = 'a'`, []byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Search(ctx, scope, []float32{1}, 10); err == nil || !strings.Contains(err.Error(), "corrupt embedding") {
+		t.Errorf("corrupt blob must surface an error, got %v", err)
 	}
 }

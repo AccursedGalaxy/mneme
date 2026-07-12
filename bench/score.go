@@ -104,6 +104,35 @@ func exactMatch(pred, gold string) bool {
 	return normalize(pred) == normalize(gold)
 }
 
+// abstentionMarkers are normalized substrings that signal the answer model
+// declined to answer. The QA prompt mandates the exact phrase "I don't know.",
+// but the check tolerates the near-synonyms models actually emit.
+var abstentionMarkers = []string{
+	"i don t know",
+	"don t know",
+	"not mentioned",
+	"no information",
+	"not specified",
+	"cannot be determined",
+	"unanswerable",
+}
+
+// abstained reports whether a predicted answer is an abstention. It is the
+// scoring rule for unanswerable (adversarial) questions, where declining to
+// answer is the gold behavior and any concrete answer is a hallucination.
+func abstained(pred string) bool {
+	n := normalize(pred)
+	if n == "" {
+		return true
+	}
+	for _, m := range abstentionMarkers {
+		if strings.Contains(n, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // f1 is the SQuAD-style token-overlap F1 between a predicted and gold answer,
 // computed over normalized tokens with multiset intersection. It rewards
 // partial answers (the right name buried in a sentence) where exact-match

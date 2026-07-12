@@ -98,6 +98,9 @@ func (m *memory) insertNew(ctx context.Context, scope Scope, candidates []extrac
 	if len(vecs) != len(kept) {
 		return nil, fmt.Errorf("embedder returned %d vectors for %d facts", len(vecs), len(kept))
 	}
+	if err := validateVecs(vecs); err != nil {
+		return nil, err
+	}
 	if err := m.recordEmbedderIdentity(ctx, vecLen(vecs)); err != nil {
 		return nil, err
 	}
@@ -137,6 +140,12 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 	user := buildConsolidationUser(existing, candidates)
 	raw, err := m.llm.Complete(ctx, system, user, true)
 	if err != nil {
+		// The caller cancelled or timed out: honor that instead of degrading —
+		// the fallback would just make more calls with a dead context and
+		// misattribute the failure to whichever call it dies in.
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("consolidation LLM call: %w", err)
+		}
 		// The consolidation call failed (transient API error, empty/truncated
 		// body, etc.). The candidates are already extracted, so degrade to an
 		// additive insert rather than failing the caller's Add — a stale fact
@@ -185,18 +194,36 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 		seen[h] = struct{}{}
 		writes = append(writes, write{text: text, hash: h})
 	}
+	// Blast-radius containment: every UPDATE/DELETE of an existing memory must
+	// be driven by new information, so at most one mutation per extracted
+	// candidate is applied (in the model's output order). Without this cap, a
+	// single hostile or confused turn — the conversation text is untrusted and
+	// reaches this LLM call verbatim — could rewrite or wipe the entire
+	// reconciliation window (consolidationTopK memories) in one Add. Dropping
+	// an excess op is always recoverable (the same change can recur on a later
+	// Add); a mass-delete is not.
+	maxMutations := len(candidates)
+	mutations := 0
 	for _, op := range ops {
 		switch op.Event {
 		case "ADD":
 			addDeduped(op.Text)
 		case "UPDATE":
 			if uuid, ok := idMap[op.ID]; ok {
+				if mutations >= maxMutations {
+					continue
+				}
+				mutations++
 				writes = append(writes, write{uuid: uuid, text: op.Text, hash: hashText(op.Text)})
 			} else {
 				addDeduped(op.Text) // idMap miss => new information, treat as ADD
 			}
 		case "DELETE":
 			if uuid, ok := idMap[op.ID]; ok {
+				if mutations >= maxMutations {
+					continue
+				}
+				mutations++
 				deleteIDs = append(deleteIDs, uuid)
 			}
 		case "NONE":
@@ -217,6 +244,9 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 		}
 		if len(vecs) != len(writes) {
 			return nil, fmt.Errorf("embedder returned %d vectors for %d writes", len(vecs), len(writes))
+		}
+		if err := validateVecs(vecs); err != nil {
+			return nil, err
 		}
 		if err := m.recordEmbedderIdentity(ctx, vecLen(vecs)); err != nil {
 			return nil, err
@@ -322,7 +352,29 @@ func (m *memory) embedOne(ctx context.Context, text string) ([]float32, error) {
 	if len(vecs) != 1 {
 		return nil, fmt.Errorf("embedder returned %d vectors for 1 input", len(vecs))
 	}
+	if len(vecs[0]) == 0 {
+		return nil, fmt.Errorf("embedder returned an empty vector")
+	}
 	return vecs[0], nil
+}
+
+// validateVecs rejects a batch containing an empty vector or mixed dimensions.
+// Either would persist facts that score 0 against every query — stored but
+// silently unretrievable — so they fail loudly before anything is written.
+func validateVecs(vecs [][]float32) error {
+	if len(vecs) == 0 {
+		return nil
+	}
+	d := len(vecs[0])
+	for i, v := range vecs {
+		if len(v) == 0 {
+			return fmt.Errorf("embedder returned an empty vector at index %d", i)
+		}
+		if len(v) != d {
+			return fmt.Errorf("embedder returned mixed dimensions: vector %d has %d, first has %d", i, len(v), d)
+		}
+	}
+	return nil
 }
 
 // today formats the pipeline's clock for date grounding in the prompt.
@@ -358,6 +410,9 @@ func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, cand
 	}
 	if len(vecs) != len(candidates) {
 		return nil, nil, fmt.Errorf("embedder returned %d vectors for %d candidates", len(vecs), len(candidates))
+	}
+	if err := validateVecs(vecs); err != nil {
+		return nil, nil, err
 	}
 
 	// Union the per-candidate neighbourhoods, keeping each record's best score.

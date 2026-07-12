@@ -33,6 +33,11 @@ func trimBase(u string) string { return strings.TrimRight(u, "/") }
 // memory layer meant to run against real, occasionally-flaky endpoints.
 const maxAttempts = 5
 
+// retryBaseDelay is the first backoff step (doubled each attempt: 250ms, 500ms,
+// 1s, 2s by default). A variable, not a constant, so tests can exercise the
+// retry loop without sleeping through the real schedule.
+var retryBaseDelay = 250 * time.Millisecond
+
 // doJSON posts body as JSON to baseURL+path and decodes the response into out.
 // It returns a descriptive error on non-2xx, including the response body, and
 // retries transient failures with exponential backoff (see maxAttempts).
@@ -47,11 +52,13 @@ func doJSON(ctx context.Context, hc *http.Client, baseURL, apiKey, path string, 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 250ms, 500ms, 1s, 2s. Abort early if the
-			// caller's context is cancelled while we wait.
-			delay := time.Duration(250<<(attempt-1)) * time.Millisecond
+			// caller's context is cancelled while we wait — but keep the error
+			// that caused the retrying, or the caller sees a bare deadline
+			// error with zero diagnostic about why time was being spent.
+			delay := retryBaseDelay << (attempt - 1)
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("%w (while retrying after: %v)", ctx.Err(), lastErr)
 			case <-time.After(delay):
 			}
 		}
@@ -75,8 +82,14 @@ func doJSON(ctx context.Context, hc *http.Client, baseURL, apiKey, path string, 
 			lastErr = fmt.Errorf("openai %s: %w", path, err)
 			continue
 		}
-		data, _ := io.ReadAll(resp.Body)
+		data, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if readErr != nil {
+			// A body cut off mid-read is a transport blip; a truncated prefix
+			// that happens to be valid JSON must not be accepted as complete.
+			lastErr = fmt.Errorf("openai %s: read response: %w", path, readErr)
+			continue
+		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("openai %s: status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
@@ -116,7 +129,10 @@ type chatRequest struct {
 	Model          string          `json:"model"`
 	Messages       []chatMessage   `json:"messages"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
-	Temperature    float32         `json:"temperature"`
+	// Temperature is a pointer so it can be dropped from the request entirely:
+	// reasoning-family models reject an explicit temperature with a 400 (see
+	// the fallback in Complete).
+	Temperature *float32 `json:"temperature,omitempty"`
 }
 
 type responseFormat struct {
@@ -145,13 +161,24 @@ func (l *LLM) Complete(ctx context.Context, system, user string, jsonObject bool
 	}
 	msgs = append(msgs, chatMessage{Role: "user", Content: user})
 
-	reqBody := chatRequest{Model: l.Model, Messages: msgs, Temperature: 0}
+	temp := float32(0) // deterministic extraction by default
+	reqBody := chatRequest{Model: l.Model, Messages: msgs, Temperature: &temp}
 	if jsonObject {
 		reqBody.ResponseFormat = &responseFormat{Type: "json_object"}
 	}
 
 	var out chatResponse
-	if err := doJSON(ctx, hc, l.BaseURL, l.APIKey, "/chat/completions", reqBody, &out); err != nil {
+	err := doJSON(ctx, hc, l.BaseURL, l.APIKey, "/chat/completions", reqBody, &out)
+	if err != nil && isTemperatureRejection(err) {
+		// Reasoning-family models (OpenAI o-series and successors) reject an
+		// explicit temperature parameter with a 400. Their decoding is not
+		// tunable anyway, so dropping the parameter loses nothing — retry once
+		// without it instead of hard-failing every call against such a model.
+		reqBody.Temperature = nil
+		out = chatResponse{}
+		err = doJSON(ctx, hc, l.BaseURL, l.APIKey, "/chat/completions", reqBody, &out)
+	}
+	if err != nil {
 		return "", err
 	}
 	if out.Error != nil {
@@ -220,8 +247,11 @@ func (e *Embedder) Embed(ctx context.Context, texts []string) ([][]float32, erro
 		vecs[d.Index] = d.Embedding
 	}
 	for i, v := range vecs {
-		if v == nil {
-			return nil, fmt.Errorf("openai embeddings: missing vector at index %d", i)
+		// A missing entry or an "embedding":[] both mean the response is
+		// unusable: an empty vector persisted downstream would score 0 against
+		// every query forever, so reject the batch loudly instead.
+		if len(v) == 0 {
+			return nil, fmt.Errorf("openai embeddings: missing or empty vector at index %d", i)
 		}
 	}
 	if len(vecs[0]) > 0 {
@@ -244,3 +274,12 @@ func (e *Embedder) Dim() int {
 // Name reports the embedding model, satisfying provider.Named so mneme can pin
 // this embedder's identity to a store and detect an accidental swap.
 func (e *Embedder) Name() string { return e.Model }
+
+// isTemperatureRejection reports whether err looks like a 400 caused by the
+// model refusing an explicit temperature parameter (the wire error message
+// names the offending parameter). Heuristic on purpose: the OpenAI-compatible
+// ecosystem has no structured error code for this.
+func isTemperatureRejection(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "status 400") && strings.Contains(s, "temperature")
+}

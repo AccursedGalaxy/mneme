@@ -5,6 +5,8 @@ import "math"
 // Cosine returns the cosine similarity of two equal-length float32 vectors.
 // It returns 0 when either vector is zero-length, has a zero magnitude, or the
 // lengths differ — callers treat 0 as "no similarity" rather than an error.
+// A NaN result (a NaN component in either vector) also collapses to 0: NaN
+// scores would make sort comparators inconsistent and could bury valid hits.
 func Cosine(a, b []float32) float32 {
 	if len(a) == 0 || len(a) != len(b) {
 		return 0
@@ -19,5 +21,9 @@ func Cosine(a, b []float32) float32 {
 	if na == 0 || nb == 0 {
 		return 0
 	}
-	return float32(dot / (math.Sqrt(na) * math.Sqrt(nb)))
+	sim := dot / (math.Sqrt(na) * math.Sqrt(nb))
+	if math.IsNaN(sim) {
+		return 0
+	}
+	return float32(sim)
 }
