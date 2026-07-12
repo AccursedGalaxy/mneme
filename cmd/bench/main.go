@@ -50,7 +50,9 @@ func run() error {
 		judgeMdl  = flag.String("judge-model", "", "model for the semantic judge; defaults to -model. Pin both of these when A/B-ing extraction so answer+oracle stay constant")
 		embedKind = flag.String("embedder", "openai", "embedder: openai | fake")
 		k         = flag.Int("k", 5, "search top-k facts fed to the answer model")
-		strategy  = flag.String("strategy", bench.StrategyAdditive, "write strategy: additive | consolidate")
+		strategy  = flag.String("strategy", bench.StrategyAdditive, "write strategy: additive | consolidate | rawturns (rawturns skips extraction and embeds the conversation itself — the control baseline for 'is extraction losing information')")
+		rawWindow = flag.Int("rawturn-window", 1, "with -strategy rawturns, how many consecutive messages per stored chunk (1 = one turn per record)")
+		oracle    = flag.String("oracle", "", "replace part of the pipeline with ground truth to isolate a stage. 'source' answers from the dataset's own evidence turns (no ingest, no retrieval) — the ceiling any memory system can reach here")
 		cprompt   = flag.String("cprompt", "", "consolidation prompt version (e.g. v1 | v2); empty = library default. Only used with -strategy consolidate")
 		rerank    = flag.Bool("rerank", false, "enable the LLM rerank pass in Search (over-retrieve, reorder, truncate to k)")
 		multiQ    = flag.Int("multiquery", 0, "if >1, expand each question into this many search phrasings and union the hits before reranking")
@@ -149,6 +151,8 @@ func run() error {
 		ConsolidationVersion: *cprompt,
 		Reranker:             reranker,
 		MultiQuery:           *multiQ,
+		RawTurnWindow:        *rawWindow,
+		Oracle:               *oracle,
 		Concurrency:          *concur,
 		Progress: func(done, total int) {
 			fmt.Fprintf(os.Stderr, "\r  scored %d/%d samples", done, total)

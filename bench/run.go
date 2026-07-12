@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/AccursedGalaxy/mneme"
 	"github.com/AccursedGalaxy/mneme/eval"
@@ -60,6 +61,16 @@ type Config struct {
 	// phrasings and union the hits before reranking (PLAN-v2.md §4.3).
 	MultiQuery int
 
+	// RawTurnWindow sets how many consecutive messages go into one stored chunk
+	// under StrategyRawTurns. 1 (the default) stores a turn per record; larger
+	// windows keep a question and its reply in the same chunk. Ignored by every
+	// other strategy.
+	RawTurnWindow int
+
+	// Oracle, when set (OracleSource), replaces part of the pipeline with ground
+	// truth to isolate one stage. Empty runs the real pipeline end to end.
+	Oracle string
+
 	// Concurrency bounds how many questions within a sample are scored in
 	// parallel. Ingestion stays sequential (writes must be ordered for
 	// consolidation); only the read-only Search→Answer→Judge phase fans out, and
@@ -90,9 +101,22 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
 	}
-	strategy, err := mnemeStrategy(cfg.Strategy)
-	if err != nil {
+
+	if err := validateOracle(cfg.Oracle); err != nil {
 		return Report{}, err
+	}
+
+	// rawturns bypasses the library pipeline on the write side, so it has no
+	// mneme.Strategy. It still builds a Memory: search/answer/judge must run on
+	// exactly the same code path as every other row, or the comparison is not one.
+	rawTurns := cfg.Strategy == StrategyRawTurns
+	strategy := mneme.Additive
+	if !rawTurns {
+		s, err := mnemeStrategy(cfg.Strategy)
+		if err != nil {
+			return Report{}, err
+		}
+		strategy = s
 	}
 
 	answerLLM := cfg.AnswerLLM
@@ -132,7 +156,7 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 		MultiQuery:           cfg.MultiQuery,
 	}
 	for i, s := range samples {
-		results, err := runSample(ctx, mem, answerLLM, judge, cfg, s)
+		results, err := runSample(ctx, mem, answerLLM, judge, cfg, s, rawTurns)
 		if err != nil {
 			return Report{}, fmt.Errorf("sample %q: %w", s.ID, err)
 		}
@@ -145,19 +169,40 @@ func Run(ctx context.Context, samples []Sample, cfg Config) (Report, error) {
 }
 
 // runSample ingests one sample's sessions then scores its questions.
-func runSample(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM, judge eval.Judge, cfg Config, s Sample) ([]QAResult, error) {
+func runSample(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM, judge eval.Judge, cfg Config, s Sample, rawTurns bool) ([]QAResult, error) {
 	scope := mneme.Scope{RunID: s.ID}
 
-	for si, sess := range s.Sessions {
-		if _, err := mem.Add(ctx, ingestMessages(sess), scope); err != nil {
-			return nil, fmt.Errorf("ingest session %d: %w", si, err)
+	// The source oracle answers from the dataset's evidence turns, so there is
+	// nothing to ingest: no extraction, no embedding, no store.
+	if cfg.Oracle == OracleSource {
+		return scoreQuestions(ctx, cfg, s, func(ctx context.Context, q QAPair) (QAResult, error) {
+			return scoreOracleQuestion(ctx, answerLLM, judge, cfg, s, q)
+		})
+	}
+
+	if rawTurns {
+		if err := ingestRawTurns(ctx, cfg.Embedder, cfg.Store, scope, s.Sessions, cfg.RawTurnWindow, time.Now()); err != nil {
+			return nil, err
+		}
+	} else {
+		for si, sess := range s.Sessions {
+			if _, err := mem.Add(ctx, ingestMessages(sess), scope); err != nil {
+				return nil, fmt.Errorf("ingest session %d: %w", si, err)
+			}
 		}
 	}
 
-	// Ingestion is done; questions are read-only (Search→Answer→Judge) and
-	// independent, so fan them out across a bounded worker pool. Results are
-	// written to a pre-sized slice by index, so output order is deterministic
-	// regardless of completion order.
+	return scoreQuestions(ctx, cfg, s, func(ctx context.Context, q QAPair) (QAResult, error) {
+		return scoreQuestion(ctx, mem, answerLLM, judge, cfg, s.ID, scope, q)
+	})
+}
+
+// scoreQuestions fans a sample's questions across a bounded worker pool. Scoring
+// is read-only and independent per question, and it is dominated by network LLM
+// calls, so the pool cuts a full run from hours to minutes. Results are written
+// to a pre-sized slice by index, so output order is deterministic regardless of
+// completion order.
+func scoreQuestions(ctx context.Context, cfg Config, s Sample, score func(context.Context, QAPair) (QAResult, error)) ([]QAResult, error) {
 	results := make([]QAResult, len(s.Questions))
 	sem := make(chan struct{}, cfg.Concurrency)
 	var wg sync.WaitGroup
@@ -178,7 +223,7 @@ func runSample(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM, ju
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			res, err := scoreQuestion(ctx, mem, answerLLM, judge, cfg, s.ID, scope, q)
+			res, err := score(ctx, q)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {

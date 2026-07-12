@@ -31,6 +31,12 @@ type Sample struct {
 	ID        string    // stable id; used as the per-sample Scope.RunID
 	Sessions  []Session // ingested in order, each via one Add
 	Questions []QAPair
+
+	// Turns maps a dataset turn id (LoCoMo's `dia_id`, e.g. "D1:3") to that
+	// turn's rendered text. It backs the source oracle: QAPair.Evidence names
+	// the turns that actually contain the answer, so answering from them
+	// measures the ceiling any memory system could reach on this dataset.
+	Turns map[string]string
 }
 
 // Session is one block of a dialogue ingested together. Date is the raw
@@ -56,6 +62,11 @@ type QAPair struct {
 	Answer       string
 	Category     string
 	Unanswerable bool
+
+	// Evidence lists the dataset turn ids (Sample.Turns keys) that contain the
+	// answer, per LoCoMo's `evidence` field. Empty for adversarial questions,
+	// which have no supporting turns by construction.
+	Evidence []string
 }
 
 // flexString unmarshals a JSON value that may be a string, number, or boolean
@@ -119,12 +130,14 @@ type locomoQA struct {
 	Answer            flexString `json:"answer"`
 	AdversarialAnswer flexString `json:"adversarial_answer"`
 	Category          int        `json:"category"`
+	Evidence          []string   `json:"evidence"`
 }
 
 type locomoTurn struct {
 	Speaker     string `json:"speaker"`
 	Text        string `json:"text"`
 	BlipCaption string `json:"blip_caption"`
+	DiaID       string `json:"dia_id"`
 }
 
 var locomoSessionKey = regexp.MustCompile(`^session_(\d+)$`)
@@ -149,7 +162,7 @@ func LoadLoCoMo(path string) ([]Sample, error) {
 			id = "sample_" + strconv.Itoa(i)
 		}
 
-		sessions, err := locomoSessions(ls.Conversation)
+		sessions, turns, err := locomoSessions(ls.Conversation)
 		if err != nil {
 			return nil, fmt.Errorf("sample %s: %w", id, err)
 		}
@@ -175,10 +188,11 @@ func LoadLoCoMo(path string) ([]Sample, error) {
 				Answer:       gold,
 				Category:     locomoCategory(q.Category),
 				Unanswerable: adversarial,
+				Evidence:     q.Evidence,
 			})
 		}
 
-		samples = append(samples, Sample{ID: id, Sessions: sessions, Questions: questions})
+		samples = append(samples, Sample{ID: id, Sessions: sessions, Questions: questions, Turns: turns})
 	}
 	return samples, nil
 }
@@ -186,7 +200,7 @@ func LoadLoCoMo(path string) ([]Sample, error) {
 // locomoSessions extracts the session_N turn arrays in numeric order, pairing
 // each with its session_N_date_time. JSON object key order is undefined, so we
 // discover the session numbers and sort them.
-func locomoSessions(conv map[string]json.RawMessage) ([]Session, error) {
+func locomoSessions(conv map[string]json.RawMessage) ([]Session, map[string]string, error) {
 	var nums []int
 	for key := range conv {
 		if m := locomoSessionKey.FindStringSubmatch(key); m != nil {
@@ -196,12 +210,13 @@ func locomoSessions(conv map[string]json.RawMessage) ([]Session, error) {
 	}
 	sort.Ints(nums)
 
+	byID := map[string]string{}
 	sessions := make([]Session, 0, len(nums))
 	for _, n := range nums {
 		key := "session_" + strconv.Itoa(n)
 		var turns []locomoTurn
 		if err := json.Unmarshal(conv[key], &turns); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", key, err)
+			return nil, nil, fmt.Errorf("parse %s: %w", key, err)
 		}
 
 		var date string
@@ -221,13 +236,27 @@ func locomoSessions(conv map[string]json.RawMessage) ([]Session, error) {
 			// Both LoCoMo speakers are human participants; tag the speaker by
 			// Name so the extractor can attribute facts to the right person.
 			msgs = append(msgs, types.Message{Role: "user", Content: content, Name: t.Speaker})
+
+			// Index the turn under its dataset id so the source oracle can look
+			// up the exact turns a question cites as evidence. The rendering
+			// carries speaker and date, matching what a retrieved chunk shows.
+			if t.DiaID != "" {
+				line := content
+				if t.Speaker != "" {
+					line = t.Speaker + ": " + content
+				}
+				if date != "" {
+					line = "(" + date + ") " + line
+				}
+				byID[t.DiaID] = line
+			}
 		}
 		if len(msgs) == 0 {
 			continue
 		}
 		sessions = append(sessions, Session{Date: date, Messages: msgs})
 	}
-	return sessions, nil
+	return sessions, byID, nil
 }
 
 // ---------------------------------------------------------------------------
