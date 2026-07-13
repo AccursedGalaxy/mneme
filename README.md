@@ -63,6 +63,27 @@ func main() {
 
 A runnable version is in [`examples/basic`](./examples/basic).
 
+### Timestamp your messages
+
+`Message.Timestamp` is optional, and setting it is the cheapest accuracy win
+available:
+
+```go
+m.Add(ctx, []mneme.Message{
+	{Role: "user", Content: "I went to the support group yesterday.",
+		Timestamp: time.Date(2023, 5, 8, 13, 56, 0, 0, time.UTC)},
+}, scope)
+```
+
+It anchors the extractor's date arithmetic on **when the conversation happened**
+rather than on when you ingested it, and it lands on the resulting fact as
+`Fact.ObservedAt`. Leave it out and the pipeline falls back to its clock, which
+means "yesterday" resolves against today — so a conversation ingested months late
+produces facts with confidently wrong dates that nothing downstream can detect.
+
+`Fact.CreatedAt` is when the fact was written; `Fact.ObservedAt` is when it was
+said. They are different questions and the store now keeps both.
+
 ## Configuration (env)
 
 `mneme.New()` builds providers from the environment (override any of them with

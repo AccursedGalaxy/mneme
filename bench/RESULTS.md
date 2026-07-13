@@ -131,6 +131,64 @@ v2's behavior would have changed nothing upstream anyway (it cannot — retrieva
 answer prompt). And the adversarial delta was measured on the real pipeline dumps, not the
 oracle, because the oracle hands adversarial questions no evidence by construction.
 
+## Temporal grounding: `ObservedAt` (the fix the section above pointed at)
+
+The section above ended by saying facts throw away the source timestamp, and that giving them one
+was the highest-value memory change on the board. It was. `Message.Timestamp` now flows into
+`Fact.ObservedAt`, the extractor's OBSERVATION DATE is anchored on when the conversation happened
+rather than on today, and a dated fact renders as `(said on 8 May, 2023) …` to the answer model.
+
+Full re-run, flash-lite extraction, answer prompt v2:
+
+| run | answerable Judge | paired Δ vs baseline [95% CI] | abstains |
+|---|---|---|---|
+| additive · 3-small (v1 baseline) | 0.341 | — | 40.0% |
+| rawturns (v2) | 0.446 | +0.048 → see below | 30.6% |
+| additive · extract=flash (v1) | 0.398 | +0.057 [+0.024, +0.083] | 39.6% |
+| **additive · flash-lite + ObservedAt (v2)** | **0.426** | **+0.085 [+0.062, +0.109]** | **29.2%** |
+
+**The cheap extractor now beats the expensive one.** `flash-lite + ObservedAt` scores 0.426 against
+`extract_flash`'s 0.398 — a real regression for flash (−0.028 [−0.052, −0.005] paired) at 5× the
+per-fact cost. Almost all of flash's edge was doing relative-date arithmetic correctly at extraction
+time. The source timestamp supplies that to *any* extraction model, for free, and more reliably.
+
+The gain is where the mechanism predicts, and nowhere else:
+
+| category | baseline | + ObservedAt |
+|---|---|---|
+| **temporal** | 0.237 | **0.533** |
+| single_hop | 0.426 | 0.476 |
+| open_domain | 0.094 | 0.125 |
+| multi_hop | 0.291 | 0.259 |
+
+Temporal more than doubles, and clears flash extraction's 0.49 using the model flash extraction was
+brought in to replace. Note this is not the answer prompt doing the work: replaying v2 against the
+*untimestamped* additive dump was worth −0.004. v2 and `ObservedAt` are worth nothing apart and
++0.085 together — the prompt supplies the rule, the record supplies the date, and neither is any use
+without the other.
+
+### The hybrid store is now the measured conclusion, not a hypothesis
+
+Under the same answer prompt, the fact store and raw turns have converged — and they win different
+categories:
+
+| | rawturns (v2) | additive + ObservedAt (v2) |
+|---|---|---|
+| answerable | 0.446 | 0.426 (Δ +0.020 [−0.019, +0.051] — **indistinguishable**) |
+| **single_hop** | **0.555** | 0.476 |
+| **temporal** | 0.414 | **0.533** |
+| multi_hop | 0.262 | 0.259 |
+| open_domain | 0.125 | 0.125 |
+
+Raw turns keep the wording, so they win single-hop recall. Facts normalize the dates, so they win
+temporal. Neither dominates, the aggregate difference is noise, and the per-category split is a
+clean statement of what each representation is *for*. That is the hybrid store's case, made with
+numbers rather than argument: keep the episodes and the derived facts, retrieve over both, and
+expect roughly single-hop-from-episodes plus temporal-from-facts.
+
+Two caveats. The `-0.03` multi-hop dip is within noise but consistent across both v2 runs, and is
+worth a look before v2 is called free. And every number here is still ten conversations.
+
 ## What this settles (measured, not guessed)
 
 1. **The system abstains correctly: adversarial 0.96.** LoCoMo's adversarial questions are unanswerable traps, and mneme declines them almost every time. The answer prompt's explicit "say I don't know" instruction is doing its job. Worth keeping, but it is not a lever, and averaging it into a headline meant to guide work only obscures the rows that differ.
@@ -149,11 +207,11 @@ oracle, because the oracle hands adversarial questions no evidence by constructi
 
 **Recommendation (v1 answer prompt): use `gemini-2.5-flash` for extraction, not flash-lite.** Roughly 5× the per-fact cost ($0.0017 vs $0.00034) for +0.057 [+0.026, +0.084] answerable Judge, most of it temporal. Boosters stay opt-in and undefaulted, pending a combined run and more conversations.
 
-> **This recommendation does not survive answer prompt v2.** Almost all of flash's edge was
-> temporal date normalization, and v2 gets that from the source timestamp instead — for free, and
-> more reliably. Under v2, rawturns (0.451, no extraction model at all) beats flash extraction
-> (0.387). If you are paying 5× for extraction, pay it for something the raw turn cannot give you.
-> See [The answer stage](#the-answer-stage-two-prompt-bugs-worth-010).
+> **Superseded — do not follow this.** Almost all of flash's edge was temporal date normalization,
+> which `Message.Timestamp`/`Fact.ObservedAt` now supply to any extraction model for free. Measured
+> head to head, **flash-lite + ObservedAt (0.426) beats flash extraction (0.398)** — flash is now a
+> real regression at 5× the per-fact cost. Use flash-lite and timestamp your messages. See
+> [Temporal grounding](#temporal-grounding-observedat-the-fix-the-section-above-pointed-at).
 
 ## Extraction-model A/B (eval fixtures)
 
@@ -176,25 +234,23 @@ the first item in.
 1. ~~The answer stage, not extraction.~~ **Done: answer prompt v2**, worth +0.097 at the oracle
    and +0.063 on rawturns. It also raised the ceiling to 0.642, which *re-opens* memory headroom
    rather than closing it.
-2. **Persist source timestamps on facts.** This is now the highest-value memory change on the
-   board, and it is small. A fact is text + hash + scope + ingest time, so the v2 date rule has
-   nothing to bite on and flash-lite's ingest-date corruption has nothing to correct it. Give
-   `types.Fact` an `ObservedAt` (the source turn's timestamp) and render it into the memory block
-   the way rawturns already does. This is the cheap half of structured attribution — do it before
-   subjects, predicates, and validity intervals.
-3. **A hybrid store, not a better extractor.** Raw turns beat extracted facts on aggregate, for
-   free, and the gap *widened* under v2 (0.451 vs 0.387). Extraction still earns its keep only
-   where it derives something the turn does not carry. Keep the episodes *and* the derived facts,
-   and retrieve over both.
-4. **A full v2 re-run of the matrix.** Every row above is a v1 run. The rankings between rows are
-   unlikely to move (v2 does not touch retrieval), but the headline numbers are now stale by
-   construction and the boosters × flash combination is still unrun.
-5. **Extraction recall on implied and causal facts (tk #11)** drops further down. The raw-turn
-   result keeps suggesting the fact representation itself, not its recall, is the weaker part.
-6. **open_domain (0.06–0.17) is the weakest category everywhere,** including the oracle, which
-   manages 0.17 under v2 (up from 0.06). A category the ceiling itself cannot score is a
-   question-format or judge problem, not a memory one — and the judge is still unvalidated
-   against human labels, which is the one piece of the harness nothing else can backstop.
+2. ~~Persist source timestamps on facts.~~ **Done: `Fact.ObservedAt`**, worth +0.085 answerable and
+   temporal 0.24 → 0.53. It also killed the flash-extraction recommendation.
+3. **Build the hybrid store.** No longer a hypothesis: under the same answer prompt, raw turns and
+   dated facts are statistically tied on aggregate and split the categories cleanly — episodes win
+   single-hop (0.555 vs 0.476), facts win temporal (0.533 vs 0.414). Keep both, retrieve over both.
+   This is the next real build, and the measurement says what to expect from it.
+4. **A full v2 + ObservedAt re-run of the matrix.** The lever matrix is all v1, untimestamped runs.
+   Consolidation, the bigger embedder, and the boosters have never been measured on a store whose
+   facts carry dates, and the boosters × extraction combination is still unrun.
+5. **Validate the judge against human labels.** Now the largest un-derisked thing in the harness.
+   Everything above is steered on a binary LLM judge that has never been checked against a person,
+   on a benchmark where a scoring bug already cost a full paid re-run. A stratified hand-labelled
+   sample of ~100 questions would put an error bar on every number in this file.
+6. **open_domain (0.09–0.17) is the weakest category everywhere,** including the oracle, which
+   manages only 0.17. A category the ceiling itself cannot score is a question-format or judge
+   problem, not a memory one — and #5 is how you find out which.
+7. **Extraction recall on implied and causal facts (tk #11)** drops further down again.
 
 ## Scoring history
 

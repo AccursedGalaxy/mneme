@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/AccursedGalaxy/mneme/store"
 	"github.com/AccursedGalaxy/mneme/types"
@@ -32,7 +33,8 @@ CREATE TABLE IF NOT EXISTS facts (
   user_id     TEXT NOT NULL DEFAULT '',
   agent_id    TEXT NOT NULL DEFAULT '',
   run_id      TEXT NOT NULL DEFAULT '',
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  observed_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(user_id, agent_id, run_id);
 CREATE INDEX IF NOT EXISTS idx_facts_hash  ON facts(user_id, agent_id, run_id, hash);
@@ -112,7 +114,53 @@ func Open(path string) (*Store, error) {
 		s.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		s.Close()
+		return nil, err
+	}
 	return s, nil
+}
+
+// migrate brings a database created by an older version up to the current
+// schema. CREATE TABLE IF NOT EXISTS is a no-op on an existing facts table, so
+// a column added to the schema constant above reaches new databases only —
+// without this, opening a pre-existing store and running any query that names
+// the new column fails with "no such column".
+//
+// Each step must be idempotent and safe to run against a database that already
+// has it applied, since it runs on every Open.
+func migrate(db *sql.DB) error {
+	cols, err := columns(db, "facts")
+	if err != nil {
+		return fmt.Errorf("inspect facts schema: %w", err)
+	}
+	if _, ok := cols["observed_at"]; !ok {
+		// Existing rows get '' — "source timestamp unknown", which is the truth:
+		// they were written before the pipeline carried one.
+		if _, err := db.Exec(`ALTER TABLE facts ADD COLUMN observed_at TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("migrate: add facts.observed_at: %w", err)
+		}
+	}
+	return nil
+}
+
+// columns returns the column names of a table.
+func columns(db *sql.DB, table string) (map[string]struct{}, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out[name] = struct{}{}
+	}
+	return out, rows.Err()
 }
 
 // isMemoryPath reports whether path names an in-memory database, which SQLite
@@ -159,8 +207,8 @@ func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO facts
-		(id, text, hash, embedding, user_id, agent_id, run_id, created_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		(id, text, hash, embedding, user_id, agent_id, run_id, created_at, observed_at)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
 		WHERE NOT EXISTS (SELECT 1 FROM facts
 			WHERE user_id = ? AND agent_id = ? AND run_id = ? AND hash = ?)`)
 	if err != nil {
@@ -171,7 +219,7 @@ func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
 		_, err := stmt.ExecContext(ctx,
 			r.ID, r.Text, r.Hash, encodeVec(r.Embedding),
 			r.Scope.UserID, r.Scope.AgentID, r.Scope.RunID,
-			r.CreatedAt.UTC().Format(timeLayout),
+			r.CreatedAt.UTC().Format(timeLayout), formatObserved(r.ObservedAt),
 			r.Scope.UserID, r.Scope.AgentID, r.Scope.RunID, r.Hash,
 		)
 		if err != nil {
@@ -181,14 +229,24 @@ func (s *Store) Insert(ctx context.Context, recs []types.Record) error {
 	return tx.Commit()
 }
 
-// Update replaces a record's text, hash and embedding by id, leaving its scope
-// and created_at untouched (created_at is the ingestion time, which an update
-// does not change). Updating a missing id is a no-op, not an error; the returned
-// bool reports whether a row actually matched.
+// Update replaces a record's text, hash, embedding and observed_at by id, leaving
+// its scope and created_at untouched (created_at is the ingestion time, which an
+// update does not change). Updating a missing id is a no-op, not an error; the
+// returned bool reports whether a row actually matched.
+//
+// A zero ObservedAt preserves the stored one rather than blanking it. An update
+// carries a new observation time only when the conversation driving it was
+// timestamped; when it was not, the fact's existing date is still the best thing
+// known about when it was said, and erasing it would lose information the store
+// already had. The CASE keeps that rule in the write itself, so no caller can
+// blank a date by passing a record it did not fully populate.
 func (s *Store) Update(ctx context.Context, rec types.Record) (bool, error) {
+	observed := formatObserved(rec.ObservedAt)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE facts SET text = ?, hash = ?, embedding = ? WHERE id = ?`,
-		rec.Text, rec.Hash, encodeVec(rec.Embedding), rec.ID)
+		`UPDATE facts SET text = ?, hash = ?, embedding = ?,
+			observed_at = CASE WHEN ? = '' THEN observed_at ELSE ? END
+		 WHERE id = ?`,
+		rec.Text, rec.Hash, encodeVec(rec.Embedding), observed, observed, rec.ID)
 	if err != nil {
 		return false, fmt.Errorf("update %s: %w", rec.ID, err)
 	}
@@ -204,7 +262,7 @@ func (s *Store) Search(ctx context.Context, scope types.Scope, vec []float32, k 
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, text, hash, embedding, user_id, agent_id, run_id, created_at
+		`SELECT id, text, hash, embedding, user_id, agent_id, run_id, created_at, observed_at
 		 FROM facts WHERE user_id = ? AND agent_id = ? AND run_id = ?`,
 		scope.UserID, scope.AgentID, scope.RunID)
 	if err != nil {
@@ -242,7 +300,7 @@ func (s *Store) Search(ctx context.Context, scope types.Scope, vec []float32, k 
 
 func (s *Store) Get(ctx context.Context, id string) (types.Record, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, text, hash, embedding, user_id, agent_id, run_id, created_at
+		`SELECT id, text, hash, embedding, user_id, agent_id, run_id, created_at, observed_at
 		 FROM facts WHERE id = ?`, id)
 	rec, err := scanRecord(row)
 	if err == sql.ErrNoRows {
@@ -347,12 +405,13 @@ type scanner interface {
 
 func scanRecord(sc scanner) (types.Record, error) {
 	var (
-		rec     types.Record
-		blob    []byte
-		created string
+		rec      types.Record
+		blob     []byte
+		created  string
+		observed string
 	)
 	if err := sc.Scan(&rec.ID, &rec.Text, &rec.Hash, &blob,
-		&rec.Scope.UserID, &rec.Scope.AgentID, &rec.Scope.RunID, &created); err != nil {
+		&rec.Scope.UserID, &rec.Scope.AgentID, &rec.Scope.RunID, &created, &observed); err != nil {
 		return types.Record{}, err
 	}
 	vec, err := decodeVec(blob)
@@ -365,7 +424,29 @@ func scanRecord(sc scanner) (types.Record, error) {
 		return types.Record{}, fmt.Errorf("parse created_at %q: %w", created, err)
 	}
 	rec.CreatedAt = t
+
+	// observed_at is empty for rows written before the column existed, and for
+	// facts whose source messages carried no timestamp. Both mean "unknown", and
+	// the zero time is how a Fact says that.
+	if observed != "" {
+		o, err := parseTime(observed)
+		if err != nil {
+			return types.Record{}, fmt.Errorf("parse observed_at %q: %w", observed, err)
+		}
+		rec.ObservedAt = o
+	}
 	return rec, nil
+}
+
+// formatObserved renders an observation time for storage, mapping the zero time
+// to the empty string rather than to year 1: a fact with no known source
+// timestamp must read back as zero, not as a date in antiquity that a temporal
+// filter would happily compare against.
+func formatObserved(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(timeLayout)
 }
 
 func encodeVec(v []float32) []byte {

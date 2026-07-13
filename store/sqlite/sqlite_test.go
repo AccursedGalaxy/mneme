@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strconv"
@@ -507,5 +508,147 @@ func TestCorruptEmbeddingBlobSurfacesError(t *testing.T) {
 	}
 	if _, err := s.Search(ctx, scope, []float32{1}, 10); err == nil || !strings.Contains(err.Error(), "corrupt embedding") {
 		t.Errorf("corrupt blob must surface an error, got %v", err)
+	}
+}
+
+// A database written before observed_at existed must keep working: CREATE TABLE
+// IF NOT EXISTS silently skips an existing table, so without the migration every
+// query naming the new column fails with "no such column" and an upgrade bricks
+// the caller's store.
+func TestOpenMigratesPreObservedAtDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Build a store with the old schema, by hand, and put a row in it.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE facts (
+	  id TEXT PRIMARY KEY, text TEXT NOT NULL, hash TEXT NOT NULL,
+	  embedding BLOB NOT NULL, user_id TEXT NOT NULL DEFAULT '',
+	  agent_id TEXT NOT NULL DEFAULT '', run_id TEXT NOT NULL DEFAULT '',
+	  created_at TEXT NOT NULL);
+	INSERT INTO facts (id, text, hash, embedding, user_id, created_at)
+	  VALUES ('old-1', 'a fact from before', 'h1', x'0000803f', 'u', '2026-01-01T00:00:00Z');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a pre-migration database must succeed: %v", err)
+	}
+	defer st.Close()
+
+	got, err := st.Get(context.Background(), "old-1")
+	if err != nil {
+		t.Fatalf("reading a pre-migration row must succeed: %v", err)
+	}
+	if got.Text != "a fact from before" {
+		t.Errorf("text = %q, want the original", got.Text)
+	}
+	// The row predates the column: its source timestamp is genuinely unknown.
+	if !got.ObservedAt.IsZero() {
+		t.Errorf("a migrated row's ObservedAt must be zero (unknown), got %v", got.ObservedAt)
+	}
+
+	// And the migrated store must still accept new writes carrying the column.
+	at := time.Date(2023, 5, 8, 13, 56, 0, 0, time.UTC)
+	if err := st.Insert(context.Background(), []types.Record{{
+		ID: "new-1", Text: "a fact from after", Hash: "h2",
+		Embedding: []float32{1}, Scope: types.Scope{UserID: "u"},
+		CreatedAt: time.Now(), ObservedAt: at,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	back, err := st.Get(context.Background(), "new-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.ObservedAt.Equal(at) {
+		t.Errorf("observed_at round-trip: got %v want %v", back.ObservedAt, at)
+	}
+}
+
+// Open runs the migration on every call, so it must be idempotent.
+func TestMigrateIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.db")
+	for i := 0; i < 3; i++ {
+		st, err := Open(path)
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		st.Close()
+	}
+}
+
+// Update must carry observed_at. It did not, and the omission silently discarded
+// the ObservedAt the consolidation path had just computed: the row kept its old
+// (usually empty) date, so the fact read back undated and the whole temporal
+// grounding mechanism was a no-op for every consolidated fact.
+func TestUpdateWritesObservedAt(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+
+	if err := st.Insert(ctx, []types.Record{{
+		ID: "f1", Text: "Caroline works at Acme", Hash: "h1",
+		Embedding: []float32{1}, Scope: types.Scope{UserID: "u"},
+		CreatedAt: time.Now(),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	said := time.Date(2023, 6, 1, 9, 0, 0, 0, time.UTC)
+	updated, err := st.Update(ctx, types.Record{
+		ID: "f1", Text: "Caroline works at Globex", Hash: "h2",
+		Embedding: []float32{1}, ObservedAt: said,
+	})
+	if err != nil || !updated {
+		t.Fatalf("update: %v, updated=%v", err, updated)
+	}
+
+	got, err := st.Get(ctx, "f1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ObservedAt.Equal(said) {
+		t.Errorf("ObservedAt = %v, want the updating conversation's time %v", got.ObservedAt, said)
+	}
+}
+
+// An update from an undated conversation must keep the date the fact already
+// had. Blanking it would turn the silent-drop bug into a silent-erase bug: a
+// previously answerable "when did X happen" would stop resolving.
+func TestUpdateWithZeroObservedAtPreservesStoredDate(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+
+	said := time.Date(2023, 5, 8, 13, 56, 0, 0, time.UTC)
+	if err := st.Insert(ctx, []types.Record{{
+		ID: "f1", Text: "Caroline attended a support group", Hash: "h1",
+		Embedding: []float32{1}, Scope: types.Scope{UserID: "u"},
+		CreatedAt: time.Now(), ObservedAt: said,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A reconciling conversation that carried no timestamp: ObservedAt is zero.
+	if _, err := st.Update(ctx, types.Record{
+		ID: "f1", Text: "Caroline attended an LGBTQ support group", Hash: "h2",
+		Embedding: []float32{1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.Get(ctx, "f1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ObservedAt.Equal(said) {
+		t.Errorf("an undated update must preserve the stored date, got %v want %v", got.ObservedAt, said)
+	}
+	if got.Text != "Caroline attended an LGBTQ support group" {
+		t.Errorf("the text must still be updated, got %q", got.Text)
 	}
 }

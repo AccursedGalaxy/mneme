@@ -216,12 +216,13 @@ func (m *memory) Close() error { return m.store.Close() }
 // the embedding), optionally attaching a search score.
 func recordToFact(r types.Record, score float32) Fact {
 	return Fact{
-		ID:        r.ID,
-		Text:      r.Text,
-		Hash:      r.Hash,
-		Score:     score,
-		CreatedAt: r.CreatedAt,
-		Scope:     r.Scope,
+		ID:         r.ID,
+		Text:       r.Text,
+		Hash:       r.Hash,
+		Score:      score,
+		CreatedAt:  r.CreatedAt,
+		ObservedAt: r.ObservedAt,
+		Scope:      r.Scope,
 	}
 }
 

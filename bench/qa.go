@@ -93,6 +93,21 @@ func answerSystem(version string) string {
 	return answerPrompts[DefaultAnswerVersion]
 }
 
+// RenderFact is how one memory is presented to the answer model: its text,
+// prefixed with the date it was said when the fact knows one.
+//
+// It is exported and used for the prediction dump as well as the prompt, so the
+// dump records the memory string the model actually saw. That equivalence is what
+// makes cmd/replay exact rather than approximate — a dump that stored bare
+// f.Text would replay without the dates and quietly under-report every run that
+// depends on them.
+func RenderFact(f mneme.Fact) string {
+	if f.ObservedAt.IsZero() {
+		return f.Text
+	}
+	return fmt.Sprintf("(said on %s) %s", f.ObservedAt.Format("2 January, 2006"), f.Text)
+}
+
 // Answer is the retrieve→answer step's second half: it feeds the retrieved
 // facts and the question to the answer LLM under the versioned QA prompt and
 // returns the model's answer. With no facts it still asks (the prompt makes the
@@ -108,6 +123,14 @@ func Answer(ctx context.Context, llm provider.LLM, version, question string, fac
 
 // buildAnswerUser renders the MEMORIES block and the QUESTION. Facts are listed
 // highest-scored first (Search already returns them in that order).
+//
+// A fact that knows when it was observed is rendered with that date in front of
+// it, which is what gives answer prompt v2's relative-date rule something to
+// resolve against. Raw turns have always carried their timestamp inline (that is
+// most of why rawturns beat the fact store on temporal questions); a fact carries
+// it in ObservedAt, and it is only useful if it reaches the answer model.
+//
+// Facts with no ObservedAt render bare, exactly as before.
 func buildAnswerUser(question string, facts []mneme.Fact) string {
 	var b strings.Builder
 	b.WriteString("MEMORIES:\n")
@@ -115,7 +138,7 @@ func buildAnswerUser(question string, facts []mneme.Fact) string {
 		b.WriteString("(none)\n")
 	} else {
 		for _, f := range facts {
-			fmt.Fprintf(&b, "- %s\n", f.Text)
+			fmt.Fprintf(&b, "- %s\n", RenderFact(f))
 		}
 	}
 	b.WriteString("\nQUESTION: ")

@@ -3,7 +3,9 @@ package bench
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AccursedGalaxy/mneme"
@@ -275,27 +277,94 @@ func scoreQuestion(ctx context.Context, mem mneme.Memory, answerLLM provider.LLM
 	return res, nil
 }
 
-// factTexts pulls the fact statements from search hits, for the -v diagnostic
-// dump (so a wrong answer can be traced to what the model actually saw).
+// factTexts renders the search hits exactly as the answer model saw them, for
+// the prediction dump — so a wrong answer can be traced to what the model was
+// actually given, and so cmd/replay can re-answer from the dump without losing
+// anything the original prompt carried (the observation dates, in particular).
 func factTexts(facts []mneme.Fact) []string {
 	out := make([]string, len(facts))
 	for i, f := range facts {
-		out[i] = f.Text
+		out[i] = RenderFact(f)
 	}
 	return out
 }
 
-// ingestMessages prepends the session date (when present) as a single dated
-// note so the extractor has an anchor for relative dates in the turns. The note
-// uses role "user" because the pipeline ignores system messages. Structured
-// temporal grounding replaces this in PLAN-v2.md §5.1; here it is the honest
-// additive baseline.
+// ingestMessages stamps every message with the session's timestamp and prepends
+// the date as a dated note.
+//
+// The Timestamp is the structured grounding (PLAN-v2.md §5.1): the pipeline reads
+// it to date the extractor's OBSERVATION DATE and to set each fact's ObservedAt,
+// so a relative date in a turn ("I went yesterday") resolves against when the
+// conversation happened rather than against the day the benchmark was run. Before
+// this, flash-lite extracted "Caroline attended an LGBTQ support group on
+// 2026-07-11" — the ingestion date — for a May 2023 event (bench/RESULTS.md).
+//
+// The prose note stays. It costs a few tokens, it is what the pre-timestamp runs
+// in the matrix were measured with, and a session whose date does not parse still
+// gets *some* anchor from it.
+// A date the layouts cannot parse leaves the timestamps alone rather than
+// stamping the zero time over them: the session still gets the prose note, and a
+// message that already carried its own Timestamp keeps it. Silently overwriting a
+// real timestamp with "unknown" would be the same class of corruption this whole
+// mechanism exists to prevent.
 func ingestMessages(sess Session) []mneme.Message {
 	if sess.Date == "" {
 		return sess.Messages
 	}
+	at, ok := parseSessionDate(sess.Date)
+	if !ok {
+		unparsedSessionDates.Add(1)
+	}
+
 	dated := make([]mneme.Message, 0, len(sess.Messages)+1)
-	dated = append(dated, mneme.Message{Role: "user", Content: "(The following conversation took place on " + sess.Date + ".)"})
-	dated = append(dated, sess.Messages...)
+	dated = append(dated, mneme.Message{Role: "user", Timestamp: at, Content: "(The following conversation took place on " + sess.Date + ".)"})
+	for _, msg := range sess.Messages {
+		if ok {
+			msg.Timestamp = at
+		}
+		dated = append(dated, msg)
+	}
 	return dated
+}
+
+// unparsedSessionDates counts sessions whose date matched no layout. A run where
+// this is nonzero has silently lost temporal grounding — every fact in those
+// sessions falls back to the ingestion date — and the headline would read "no
+// temporal improvement" rather than "the dates never parsed". UnparsedSessionDates
+// is what lets the harness say which.
+var unparsedSessionDates atomic.Int64
+
+// UnparsedSessionDates reports how many sessions have so far failed to yield a
+// timestamp. A nonzero count means the dataset's date format is not in
+// sessionDateLayouts and the run's temporal numbers are not trustworthy.
+func UnparsedSessionDates() int64 { return unparsedSessionDates.Load() }
+
+// sessionDateLayouts are the shapes a dataset writes a session date in. LoCoMo
+// uses the prose form ("1:56 pm on 8 May, 2023"); LongMemEval's haystack_dates
+// are ISO-ish, and its published form carries a weekday and time
+// ("2023/05/20 (Sat) 02:21"), so both are accepted.
+//
+// Order matters only in that the first match wins; the shapes are disjoint.
+var sessionDateLayouts = []string{
+	"3:04 pm on 2 January, 2006",
+	"15:04 on 2 January, 2006",
+	"2 January, 2006",
+	time.RFC3339,
+	"2006/01/02 (Mon) 15:04",
+	"2006-01-02 15:04",
+	"2006-01-02",
+}
+
+// parseSessionDate turns a dataset's session date into a timestamp. It reports
+// whether it parsed: an unparsed date must stay the zero time ("unknown") rather
+// than silently becoming some default, because a wrong timestamp is worse than an
+// absent one — it would be confidently propagated into every fact.
+func parseSessionDate(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	for _, layout := range sessionDateLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }

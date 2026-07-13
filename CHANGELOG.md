@@ -14,6 +14,32 @@ benchmark validating the retrieval and consolidation levers as a set) is the
 gate for cutting it — see `bench/RESULTS.md` and `PLAN-v2.md` §10.
 
 ### Added
+- **Temporal grounding: `Message.Timestamp` and `Fact.ObservedAt`.** A message
+  can now carry when it was said, and the fact extracted from it records that
+  time — distinct from `CreatedAt`, which stays ingestion time. The extractor's
+  date arithmetic is anchored on the conversation's own timestamp instead of on
+  today, so "I went yesterday" resolves against when it was said rather than when
+  it was ingested. Both fields are optional and default to the previous behavior
+  (fall back to the clock; `ObservedAt` stays zero), so no existing caller
+  changes. SQLite stores get an `observed_at` column, added by an idempotent
+  migration on `Open` — existing databases upgrade in place and their rows read
+  back with a zero `ObservedAt`, which is the truth: their source time was never
+  recorded.
+
+  `ObservedAt` is **say-time, not event-time**: for "I went yesterday" said on 8
+  May it is 8 May, and the event's own date (7 May) is what the extractor resolves
+  into the fact text. Do not answer "when did X happen" from the field directly.
+
+  Under `Consolidate`, an `UPDATE` takes the reconciling conversation's
+  observation time; if that conversation carried no timestamp, the fact keeps the
+  date it already had rather than being blanked — losing a known date is worse
+  than not learning a new one. `Store.Update` enforces this, so no caller can
+  erase a date by passing a partially-populated record.
+
+  This fixes a silent corruption. Without a grounding date, `gemini-2.5-flash-lite`
+  wrote *"Caroline attended an LGBTQ support group on 2026-07-11"* — the ingestion
+  date — for a May 2023 event, and nothing downstream could detect it. See
+  `bench/RESULTS.md`.
 - **Consolidation write strategy** (`WithStrategy(Consolidate)`): a second LLM
   call per `Add` reconciles newly extracted facts against existing ones —
   ADD / UPDATE / DELETE / NONE — so a changed fact replaces the stale one
@@ -47,6 +73,18 @@ gate for cutting it — see `bench/RESULTS.md` and `PLAN-v2.md` §10.
 - **Transient-failure retries** in the OpenAI-compatible client: network errors,
   429/5xx, and empty/garbled 2xx bodies are retried with exponential backoff (up
   to 5 attempts), so one gateway blip no longer aborts a long ingestion or bench.
+- **Benchmark answer prompt v2** (`cmd/bench -answer-version`, now the default).
+  The source oracle showed the answer stage lost more score than retrieval did:
+  v1 abstained on questions whose answer sat verbatim in the evidence, and echoed
+  relative dates ("last week") back instead of resolving them. v2 fixes both,
+  worth +0.097 answerable Judge at the oracle. v1 stays registered so past runs
+  remain reproducible, and an unknown version is now an error rather than a
+  silent fallback to the default.
+- **`cmd/replay`**: re-runs the answer step of a finished run against a different
+  answer prompt or answer model, reading its prediction dump and writing a new one
+  for `cmd/rescore` to compare. The answer prompt cannot affect retrieval, so
+  replaying a dump is exact, not approximate — an answer-stage change now costs
+  one call per question instead of a full re-ingest.
 
 ### Changed
 - File-backed SQLite stores open in WAL mode for better concurrent-read behavior.
@@ -57,6 +95,11 @@ gate for cutting it — see `bench/RESULTS.md` and `PLAN-v2.md` §10.
   reranking all measured flat. `cmd/bench`/`cmd/eval` `-model` defaults, the
   README config table, and `examples/basic` updated to match. See
   `bench/RESULTS.md`.
+
+  **Superseded.** Those figures predate the adversarial-scoring fix, and the
+  recommendation itself no longer holds: flash's edge was almost entirely
+  temporal date normalization, which `Message.Timestamp` now supplies to any
+  extraction model for free. See `bench/RESULTS.md` for the current numbers.
 
 ### Fixed
 - Consolidation detects no-op `UPDATE`s against a target that was concurrently

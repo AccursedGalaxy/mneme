@@ -167,6 +167,15 @@ func run() error {
 		return err
 	}
 
+	// A session whose date matched no layout ingested without a timestamp, so its
+	// facts fell back to the ingestion date. That is invisible in the score — it
+	// just reads as "temporal did not improve" — so it has to be said out loud.
+	if n := bench.UnparsedSessionDates(); n > 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: %d session date(s) matched no layout in bench.sessionDateLayouts.\n"+
+			"  Those sessions ingested with no timestamp and their facts carry no ObservedAt,\n"+
+			"  so this run's temporal numbers understate the pipeline. Fix the layout list.\n", n)
+	}
+
 	if *verbose {
 		printAnswers(report)
 	}

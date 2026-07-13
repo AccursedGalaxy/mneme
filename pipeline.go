@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/AccursedGalaxy/mneme/types"
 )
@@ -42,9 +43,11 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 		existing, _ = relabelExisting(hits)
 	}
 
-	// 4. Extract (one LLM call) with our versioned prompt.
+	// 4. Extract (one LLM call) with our versioned prompt, grounded on when the
+	// conversation happened rather than on when it is being ingested.
+	observed := observedAt(msgs)
 	system := systemPrompt(m.promptVersion)
-	user := buildExtractionUser(m.today(), existing, nil, msgs)
+	user := buildExtractionUser(m.groundingDate(observed), existing, nil, msgs)
 	raw, err := m.llm.Complete(ctx, system, user, true)
 	if err != nil {
 		return nil, fmt.Errorf("extraction LLM call: %w", err)
@@ -62,22 +65,22 @@ func (m *memory) Add(ctx context.Context, msgs []Message, scope Scope) ([]Fact, 
 	// UPDATE/DELETE, so we save the second LLM call and fall through to the
 	// additive insert.
 	if m.strategy == Consolidate {
-		conExisting, conIDMap, err := m.retrieveForConsolidation(ctx, scope, extracted)
+		conExisting, conIDMap, priorObserved, err := m.retrieveForConsolidation(ctx, scope, extracted)
 		if err != nil {
 			return nil, err
 		}
 		if len(conExisting) > 0 {
-			return m.consolidate(ctx, scope, conExisting, conIDMap, extracted)
+			return m.consolidate(ctx, scope, observed, conExisting, conIDMap, priorObserved, extracted)
 		}
 	}
-	return m.insertNew(ctx, scope, extracted)
+	return m.insertNew(ctx, scope, observed, extracted)
 }
 
 // insertNew is the additive write path (PLAN.md §4 steps 6–9): hash-dedup the
 // candidates against the batch and what is already stored in scope, embed the
 // survivors in one batch, and insert them. It returns the newly written facts.
 // Consolidation falls back to this when its LLM response is unusable.
-func (m *memory) insertNew(ctx context.Context, scope Scope, candidates []extractedFact) ([]Fact, error) {
+func (m *memory) insertNew(ctx context.Context, scope Scope, observed time.Time, candidates []extractedFact) ([]Fact, error) {
 	existingHashes, err := m.store.ExistingHashes(ctx, scope)
 	if err != nil {
 		return nil, fmt.Errorf("load existing hashes: %w", err)
@@ -114,12 +117,13 @@ func (m *memory) insertNew(ctx context.Context, scope Scope, candidates []extrac
 			return nil, fmt.Errorf("generate id: %w", err)
 		}
 		recs[i] = types.Record{
-			ID:        id,
-			Text:      f.Text,
-			Hash:      hashes[i],
-			Embedding: vecs[i],
-			Scope:     scope,
-			CreatedAt: now,
+			ID:         id,
+			Text:       f.Text,
+			Hash:       hashes[i],
+			Embedding:  vecs[i],
+			Scope:      scope,
+			CreatedAt:  now,
+			ObservedAt: observed,
 		}
 		facts[i] = recordToFact(recs[i], 0)
 	}
@@ -135,7 +139,10 @@ func (m *memory) insertNew(ctx context.Context, scope Scope, candidates []extrac
 // real UUIDs via idMap. A malformed/empty response falls back to an additive
 // insert of the candidates — never a corrupted store. It returns the facts that
 // were added or updated (the changes); deletes and no-ops are not returned.
-func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labeledMemory, idMap map[string]string, candidates []extractedFact) ([]Fact, error) {
+// priorObserved maps an existing record's UUID to the ObservedAt already stored
+// on it, so an UPDATE driven by an undated conversation can keep the date the
+// fact already had instead of reporting a zero it did not write.
+func (m *memory) consolidate(ctx context.Context, scope Scope, observed time.Time, existing []labeledMemory, idMap map[string]string, priorObserved map[string]time.Time, candidates []extractedFact) ([]Fact, error) {
 	system := consolidationSystemPrompt(m.consolidationVersion)
 	user := buildConsolidationUser(existing, candidates)
 	raw, err := m.llm.Complete(ctx, system, user, true)
@@ -152,13 +159,13 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 		// left un-reconciled is recoverable on a later Add; a failed Add loses
 		// the data. Never corrupt the store. (Same doctrine as a malformed
 		// response below.)
-		return m.insertNew(ctx, scope, candidates)
+		return m.insertNew(ctx, scope, observed, candidates)
 	}
 
 	ops := parseConsolidation(raw)
 	if len(ops) == 0 {
 		// Unusable response: do no harm, behave like additive.
-		return m.insertNew(ctx, scope, candidates)
+		return m.insertNew(ctx, scope, observed, candidates)
 	}
 
 	// Partition ops into writes (ADD/UPDATE — both need an embedding) and
@@ -255,12 +262,23 @@ func (m *memory) consolidate(ctx context.Context, scope Scope, existing []labele
 		now := m.clock()
 		var inserts []types.Record
 		for i, w := range writes {
+			// An UPDATE is observed when the conversation driving it was said. If
+			// that conversation carried no timestamp, the fact keeps the date it
+			// already had rather than being blanked to "unknown" — losing a known
+			// date is strictly worse than not learning a new one. Store.Update
+			// enforces the same rule; resolving it here too keeps the Fact we
+			// return equal to the row we just wrote.
+			recObserved := observed
+			if recObserved.IsZero() && w.uuid != "" {
+				recObserved = priorObserved[w.uuid]
+			}
 			rec := types.Record{
-				Text:      w.text,
-				Hash:      w.hash,
-				Embedding: vecs[i],
-				Scope:     scope,
-				CreatedAt: now,
+				Text:       w.text,
+				Hash:       w.hash,
+				Embedding:  vecs[i],
+				Scope:      scope,
+				CreatedAt:  now,
+				ObservedAt: recObserved,
 			}
 			if w.uuid == "" {
 				id, err := newUUID()
@@ -377,9 +395,48 @@ func validateVecs(vecs [][]float32) error {
 	return nil
 }
 
+// groundingLayout is how a date is written into the extraction prompt's
+// OBSERVATION DATE. One constant, because a timestamped and an untimestamped Add
+// must hand the extractor the same shape.
+const groundingLayout = "2006-01-02 (Monday)"
+
 // today formats the pipeline's clock for date grounding in the prompt.
 func (m *memory) today() string {
-	return m.clock().Format("2006-01-02 (Monday)")
+	return m.clock().Format(groundingLayout)
+}
+
+// observedAt returns when a conversation happened: the earliest timestamp its
+// messages carry, or the zero time when the caller supplied none.
+//
+// Earliest rather than latest because the extractor's relative dates ("I went
+// yesterday") are said against the point the conversation opened, and a single
+// Add is one coherent exchange, not a span worth modelling.
+func observedAt(msgs []types.Message) time.Time {
+	var first time.Time
+	for _, msg := range msgs {
+		if msg.Timestamp.IsZero() {
+			continue
+		}
+		if first.IsZero() || msg.Timestamp.Before(first) {
+			first = msg.Timestamp
+		}
+	}
+	return first
+}
+
+// groundingDate is the date the extractor resolves relative expressions against:
+// the conversation's own observation time when it has one, falling back to the
+// clock (ingestion time) when it does not.
+//
+// Getting this wrong is not a cosmetic error. Grounded on ingestion time, "I went
+// to the support group yesterday" — said in May 2023, ingested today — extracts as
+// a fact dated today, and the store now holds a confidently wrong date that no
+// downstream stage can detect, let alone repair.
+func (m *memory) groundingDate(observed time.Time) string {
+	if !observed.IsZero() {
+		return observed.Format(groundingLayout)
+	}
+	return m.today()
 }
 
 // retrieveForConsolidation gathers the existing facts the extracted candidates
@@ -395,9 +452,12 @@ func (m *memory) today() string {
 // scores below that cap can be missed — widen WithConsolidationTopK to trade
 // prompt size for recall. Returns the relabelled facts and the integer-id ->
 // real-UUID map the consolidation pass uses to apply UPDATE/DELETE.
-func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, candidates []extractedFact) ([]labeledMemory, map[string]string, error) {
+// It also returns each retrieved record's stored ObservedAt, keyed by UUID, so
+// an UPDATE from an undated conversation can preserve the date already on the
+// fact it overwrites.
+func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, candidates []extractedFact) ([]labeledMemory, map[string]string, map[string]time.Time, error) {
 	if m.consolidationTopK <= 0 || len(candidates) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	texts := make([]string, len(candidates))
@@ -406,13 +466,13 @@ func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, cand
 	}
 	vecs, err := m.embedder.Embed(ctx, texts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("embed candidates for consolidation: %w", err)
+		return nil, nil, nil, fmt.Errorf("embed candidates for consolidation: %w", err)
 	}
 	if len(vecs) != len(candidates) {
-		return nil, nil, fmt.Errorf("embedder returned %d vectors for %d candidates", len(vecs), len(candidates))
+		return nil, nil, nil, fmt.Errorf("embedder returned %d vectors for %d candidates", len(vecs), len(candidates))
 	}
 	if err := validateVecs(vecs); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Union the per-candidate neighbourhoods, keeping each record's best score.
@@ -420,7 +480,7 @@ func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, cand
 	for _, v := range vecs {
 		hits, err := m.store.Search(ctx, scope, v, m.consolidationTopK)
 		if err != nil {
-			return nil, nil, fmt.Errorf("retrieve for consolidation: %w", err)
+			return nil, nil, nil, fmt.Errorf("retrieve for consolidation: %w", err)
 		}
 		for _, h := range hits {
 			if prev, ok := best[h.ID]; !ok || h.Score > prev.Score {
@@ -429,7 +489,7 @@ func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, cand
 		}
 	}
 	if len(best) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	// Rank by score (ties broken by id for a deterministic relabel) and cap.
@@ -448,7 +508,11 @@ func (m *memory) retrieveForConsolidation(ctx context.Context, scope Scope, cand
 	}
 
 	labeled, idMap := relabelExisting(merged)
-	return labeled, idMap, nil
+	priorObserved := make(map[string]time.Time, len(merged))
+	for _, h := range merged {
+		priorObserved[h.ID] = h.ObservedAt
+	}
+	return labeled, idMap, priorObserved, nil
 }
 
 // relabelExisting maps retrieved facts' real UUIDs to small integer-string ids
